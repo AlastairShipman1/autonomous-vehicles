@@ -9,7 +9,7 @@ import argparse
 from pathlib import Path
 
 from av_sim_toy import render_episode, run_episode, sample_scenario
-from tools.planners import make_planner
+from tools.planners import make_planner, make_predictor
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -20,7 +20,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--stride", type=int, default=1, help="render every n-th step (faster, choppier)")
     args = ap.parse_args(argv)
     out = args.out or Path("out") / f"seed_{args.seed}_{args.planner}.mp4"
-    ep = run_episode(sample_scenario(args.seed), make_planner(args.planner))
+    ep = run_episode(sample_scenario(args.seed), make_planner(args.planner), predictor=make_predictor(args.planner))
     render_episode(ep, out, stride=args.stride)
     print(f"{out}  outcome={ep.outcome}  duration={ep.t[-1] + ep.dt:.2f}s")
 
