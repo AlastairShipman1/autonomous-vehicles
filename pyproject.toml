@@ -1,7 +1,29 @@
 [project]
 name = "autonomous-vehicles"
 version = "0.1.0"
-description = "Add your description here"
+description = "Laptop-side autonomous driving stack: av_core, toy occlusion sim, tooling"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["av-core", "av-sim-toy"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "hypothesis>=6",
+    "mcap>=1.2",
+    "mcap-ros2-support>=0.5",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["av_core", "av_sim_toy"]
+
+[tool.uv.sources]
+av-core = { workspace = true }
+av-sim-toy = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
