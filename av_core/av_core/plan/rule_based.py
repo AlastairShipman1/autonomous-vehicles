@@ -6,7 +6,7 @@ Constants are starting guesses to tune. ``reason`` names the limit that bound.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -27,17 +27,25 @@ class RuleBasedPlanner:
     lead_standoff: float = 6.0  # m
     light_standoff: float = 2.0  # m
     lane_margin: float = 0.3  # m, added to the half-widths for the "in my path" test
+    _frame_cache: tuple | None = field(default=None, init=False, repr=False, compare=False)
+
+    def frame_for(self, route: Route) -> RouteFrame:
+        """RouteFrame for ``route``, reused while the same Route object is passed in (one per episode)."""
+        if self._frame_cache is None or self._frame_cache[0] is not route:
+            self._frame_cache = (route, RouteFrame(route))
+        return self._frame_cache[1]
 
     def plan(self, world: WorldModel, route: Route,
              predictions: tuple[PredictedTrajectory, ...] = ()) -> PlannerCommand:
         """``predictions`` is ignored here; it keeps the signature shared with planner v1."""
-        frame = RouteFrame(route)
-        limits = self.limits(world, route, frame)
+        frame = self.frame_for(route)
+        limits = self.limits(world, route, frame, predictions)
         reason = min(limits, key=limits.get)  # dict order breaks ties: safety limits first
         return PlannerCommand(world.stamp, limits[reason], reason)
 
-    def limits(self, world: WorldModel, route: Route, frame: RouteFrame | None = None) -> dict[str, float]:
-        frame = frame or RouteFrame(route)
+    def limits(self, world: WorldModel, route: Route, frame: RouteFrame | None = None,
+               predictions: tuple[PredictedTrajectory, ...] = ()) -> dict[str, float]:
+        frame = frame or self.frame_for(route)
         ego = world.ego
         s0, _ = frame.project(ego.x, ego.y)
         # Gaps are measured from the front bumper, which is (length + wheelbase) / 2 ahead of the rear axle.

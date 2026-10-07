@@ -39,14 +39,22 @@ class RouteFrame:
 
     def project(self, x: float, y: float) -> tuple[float, float]:
         """(arc length, signed lateral offset) of the closest route point; left of travel is positive."""
-        p = np.array([x, y])
+        s, lateral = self.project_many(np.array([[x, y]]))
+        return float(s[0]), float(lateral[0])
+
+    def project_many(self, pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Vectorised ``project`` for (M, 2) points: arrays of arc length and signed lateral offset."""
+        pts = np.asarray(pts, dtype=np.float64).reshape(-1, 2)
         a = self.points[:-1]
-        t = np.clip(np.einsum("ij,ij->i", p - a, self._seg) / self._seg_len**2, 0.0, 1.0)
-        foot = a + t[:, None] * self._seg
-        i = int(np.argmin(np.hypot(*(foot - p).T)))
-        cross = self._seg[i, 0] * (p[1] - foot[i, 1]) - self._seg[i, 1] * (p[0] - foot[i, 0])
-        lateral = float(np.hypot(*(foot[i] - p)) * (1.0 if cross >= 0 else -1.0))
-        return float(self.s[i] + t[i] * self._seg_len[i]), lateral
+        rel = pts[:, None, :] - a[None, :, :]  # (M, N-1, 2)
+        t = np.clip(np.einsum("mkj,kj->mk", rel, self._seg) / self._seg_len**2, 0.0, 1.0)
+        off = rel - t[:, :, None] * self._seg[None, :, :]  # vector from the foot point to the query point
+        dist = np.hypot(off[..., 0], off[..., 1])
+        i = np.argmin(dist, axis=1)
+        m = np.arange(len(pts))
+        cross = self._seg[i, 0] * off[m, i, 1] - self._seg[i, 1] * off[m, i, 0]
+        lateral = np.where(cross >= 0, 1.0, -1.0) * dist[m, i]
+        return self.s[i] + t[m, i] * self._seg_len[i], lateral
 
 
 def _menger_curvature(pts: np.ndarray, k: int) -> np.ndarray:
