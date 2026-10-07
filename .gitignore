@@ -121,3 +121,5 @@ dmypy.json
 
 #Pycharm IDE
 .idea
+# rendered videos and sweep outputs
+out/
