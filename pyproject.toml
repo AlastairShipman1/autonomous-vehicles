@@ -27,3 +27,5 @@ av-sim-toy = { workspace = true }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-m 'not slow'"
+markers = ["slow: long-running tests, run with -m slow"]
