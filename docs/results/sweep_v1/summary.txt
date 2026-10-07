@@ -1,0 +1,14 @@
+planner v1, seeds reporting (200 episodes, 19 s)
+
+pedestrian present (n = 96)
+  collision_rate       33.3%  (95% CI 24.7% to 43.2%)
+  min_distance_m       1.89  (95% CI 1.61 to 2.18)
+  finite_ttc_rate      97.9%  (95% CI 92.7% to 99.4%)
+  min_ttc_s            0.71  (95% CI 0.58 to 0.83)   [defined in 94]
+  braking_onset_m      21.93  (95% CI 21.14 to 22.75)   [defined in 96]
+  time_penalty_s       3.90  (95% CI 3.57 to 4.22)   [defined in 64]
+
+pedestrian absent (n = 104)
+  needless_stop_rate   0.0%  (95% CI 0.0% to 3.6%)
+  braking_onset_m      19.92  (95% CI 19.58 to 20.26)   [defined in 104]
+  time_penalty_s       1.18  (95% CI 0.98 to 1.36)   [defined in 104]
