@@ -15,7 +15,7 @@ FRONT = 0.5 * (4.7 + 2.9)
 
 
 def world(speed=10.0, x=0.0, agents=(), occluded=()):
-    return WorldModel(1.0, EgoState(x, 0.0, 0.0, speed, 4.7, 1.9, 2.9), tuple(agents), tuple(occluded), "none", None)
+    return WorldModel(1.0, EgoState(x, 0.0, 0.0, speed, 4.7, 1.9, 2.9), tuple(agents), tuple(occluded), ())
 
 
 def ped(x, y, vx=0.0, vy=0.0, id=5):

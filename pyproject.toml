@@ -40,6 +40,7 @@ pythonVersion = "3.12"
 typeCheckingMode = "standard"
 reportMissingParameterType = "error"
 reportUnknownParameterType = "error"
+extraPaths = ["./src/av_core"]
 
 [tool.ruff.lint]
 # ANN401 bans explicit `Any`; ANN001/002/003 require annotations on parameters.

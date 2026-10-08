@@ -5,19 +5,26 @@ import pytest
 
 from av_core.geometry import RouteFrame, densify
 from av_core.plan import RuleBasedPlanner
-from av_core.types import Agent, EgoState, Route, WorldModel
+from av_core.types import Agent, AgentClass, EgoState, PlannerReason, Route, TrafficLight, TrafficLightState, WorldModel
 
+RED, YELLOW, GREEN, UNKNOWN = (TrafficLightState.RED, TrafficLightState.YELLOW,
+                                TrafficLightState.GREEN, TrafficLightState.UNKNOWN)
 PLANNER = RuleBasedPlanner()
 STRAIGHT = densify([[0, 0], [300, 0]], 13.9)
 
 
-def world(speed=10.0, agents=(), light="none", stop_line=None, x=0.0):
+def world(speed=10.0, agents=(), lights=(), x=0.0):
     ego = EgoState(x, 0.0, 0.0, speed, 4.7, 1.9, 2.9)
-    return WorldModel(1.0, ego, tuple(agents), (), light, stop_line)
+    return WorldModel(1.0, ego, tuple(agents), (), tuple(lights))
+
+
+def light(state, x, y=0.0, id=1, half=1.75):
+    """A light whose stop line is a vertical segment of half-length ``half`` centred at (x, y)."""
+    return TrafficLight(id, state, [[x, y - half], [x, y + half]])
 
 
 def car(x, y=0.0, id=1, length=4.5, width=2.0, vx=0.0):
-    return Agent(id, "vehicle", x, y, 0.0, vx, 0.0, length, width, vx == 0.0)
+    return Agent(id, AgentClass.VEHICLE, x, y, 0.0, vx, 0.0, length, width, vx == 0.0)
 
 
 def test_densify_spacing_and_endpoint():
@@ -98,7 +105,7 @@ def test_nearest_lead_wins():
 def test_red_light_gives_stopping_profile():
     speeds = []
     for x in (0.0, 5.0, 10.0, 15.0):
-        cmd = PLANNER.plan(world(speed=5.0, x=x, light="red", stop_line=[25.0, 0.0]), STRAIGHT)
+        cmd = PLANNER.plan(world(speed=5.0, x=x, lights=[light(RED, 25.0)]), STRAIGHT)
         assert cmd.reason == "light"
         speeds.append(cmd.target_speed)
     assert speeds == sorted(speeds, reverse=True)
@@ -107,25 +114,43 @@ def test_red_light_gives_stopping_profile():
 
 
 def test_yellow_stops_only_if_ego_can():
-    stop = [30.0, 0.0]
-    can = PLANNER.plan(world(speed=8.0, light="yellow", stop_line=stop), STRAIGHT)  # needs 10.7 m, has 26
-    cannot = PLANNER.plan(world(speed=13.0, x=14.0, light="yellow", stop_line=stop), STRAIGHT)  # needs 28 m, has 12
+    yellow = [light(YELLOW, 30.0)]
+    can = PLANNER.plan(world(speed=8.0, lights=yellow), STRAIGHT)  # needs 10.7 m, has 26
+    cannot = PLANNER.plan(world(speed=13.0, x=14.0, lights=yellow), STRAIGHT)  # needs 28 m, has 12
     assert can.reason == "light"
     assert cannot.reason == "route" and cannot.target_speed == 13.9
 
 
-def test_green_none_and_missing_stop_line_ignore_light():
-    for kw in ({"light": "green", "stop_line": [30.0, 0.0]}, {"light": "none", "stop_line": [30.0, 0.0]},
-               {"light": "red", "stop_line": None}):
-        assert PLANNER.plan(world(**kw), STRAIGHT).reason == "route"
+def test_unknown_state_is_treated_like_red():
+    unknown = PLANNER.plan(world(speed=5.0, lights=[light(UNKNOWN, 25.0)]), STRAIGHT)
+    red = PLANNER.plan(world(speed=5.0, lights=[light(RED, 25.0)]), STRAIGHT)
+    assert unknown.reason == PlannerReason.LIGHT and unknown.target_speed == red.target_speed
+
+
+def test_green_and_no_lights_ignore_light():
+    for lights in ([light(GREEN, 30.0)], []):
+        assert PLANNER.plan(world(lights=lights), STRAIGHT).reason == "route"
+
+
+def test_light_on_another_street_is_ignored():
+    # A red stop line 12 m to the side of the route controls a different lane; the route's own is green.
+    w = world(lights=[light(RED, 30.0, y=12.0, id=1), light(GREEN, 30.0, id=2)])
+    assert PLANNER.plan(w, STRAIGHT).reason == "route"
+
+
+def test_nearest_red_binds_when_several_lights_apply():
+    near, far = light(RED, 25.0, id=1), light(RED, 60.0, id=2)
+    both = PLANNER.limits(world(speed=5.0, lights=[far, near]), STRAIGHT)["light"]
+    assert both == PLANNER.limits(world(speed=5.0, lights=[near]), STRAIGHT)["light"]
+    assert both < PLANNER.limits(world(speed=5.0, lights=[far]), STRAIGHT)["light"]
 
 
 def test_past_the_stop_line_ignores_red():
-    assert PLANNER.plan(world(x=40.0, light="red", stop_line=[30.0, 0.0]), STRAIGHT).reason == "route"
+    assert PLANNER.plan(world(x=40.0, lights=[light(RED, 30.0)]), STRAIGHT).reason == "route"
 
 
 def test_minimum_of_limits_and_reason():
-    w = world(speed=5.0, agents=[car(x=80)], light="red", stop_line=[40.0, 0.0])
+    w = world(speed=5.0, agents=[car(x=80)], lights=[light(RED, 40.0)])
     limits = PLANNER.limits(w, STRAIGHT)
     cmd = PLANNER.plan(w, STRAIGHT)
     assert cmd.target_speed == min(limits.values())

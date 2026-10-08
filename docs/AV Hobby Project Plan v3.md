@@ -4,7 +4,7 @@ Oct 7, 2026 · @Alastair
 
 ## Summary
 
-Build a full CARLA + ROS 2 driving stack over about 300 hours (Oct 2026 to Oct 2027), with active inference (AIF) as one component: the ego behaviour planner for occluded-pedestrian situations. Ground truth comes first and perception is swapped in later behind the same interface. The end evaluation is CARLA Leaderboard 2.1, with Bench2Drive as the fallback. A standalone AIF package is optional and decided at a gate after AIF runs in CARLA.
+Build a full CARLA + ROS 2 driving stack over about 300 hours (Oct 2026 to Oct 2027), with active inference (AIF) as one component: the ego behaviour planner for occluded-pedestrian situations. Ground truth comes first and perception is swapped in later behind the same interface. The end evaluation is CARLA Leaderboard 2.1 on the **MAP track**, with Bench2Drive as the fallback. A standalone AIF package is optional and decided at a gate after AIF runs in CARLA.
 
 Principles:
 
@@ -48,12 +48,37 @@ The predictor feeds the planner's transition model for visible agents; the plann
 Repo layout:
 
 ```text
-av_core/        pure Python, no ROS: world_model, predict/, plan/ (rule_based, aif/), track/, fuse/, control/, sweep/
+av_core/        pure Python, no ROS: world_model, map/, localize/, predict/, plan/ (rule_based, aif/), track/, fuse/, control/, sweep/
 av_sim_toy/     2D occlusion sim for the laptop
 av_ros/         thin nodes: harness, perception, predictor, planner, control
 av_interfaces/  ROS messages, frozen in M1
 tools/          MCAP readers, Foxglove layouts, eval scripts
 ```
+
+## MAP track
+
+Leaderboard 2.0 and 2.1 offer two tracks. MAP gets the same sensors as SENSORS (cameras, LiDAR, radar, GNSS, IMU, speedometer) plus the HD map as a pseudosensor: an OpenDRIVE file passed to the agent as a string ([evaluation criteria](https://leaderboard.carla.org/evaluation_v2_1/)). There is still no actor list, so perception of vehicles and pedestrians is unchanged and the privileged ground truth used in M1 to M4 stays off limits for a submission.
+
+**What stays the same:** M1 to M4, the toy sim, the AIF work, the package gate, and what M5 detects (objects from sensors, light state from camera crops).
+
+**What it adds:**
+
+| Item | What | Rough hours (estimate, not from the budget) | Where |
+| --- | --- | --- | --- |
+| Map module | Parse OpenDRIVE into lanes, signals and stop lines; pure Python in `av_core/map/`, tested on the laptop with saved town files | 10 with light association | M5 |
+| Light association | The world-model builder joins the map's signals to perceived state and emits `TrafficLight(id, state, stop_line)` for each light | (included above) | M5 |
+| Localization | Fuse GNSS, IMU and speed into a pose, and match it to the map. The map is only usable with a pose in its frame, so this is a prerequisite | 10 to 15 | before M5's map items |
+
+The roughly 25 h exceeds the 20 h buffer. Options: take it from M5's fallback scope, or let the finish date slip. This is yours to decide.
+
+**Design consequences:**
+
+- The map lives in the builder, not in `WorldModel`. `WorldModel` stays self-contained (each light carries its own stop line), so a recorded bag still replays through the planner with no map.
+- Ground truth does the same job in M1 to M4: the harness reads CARLA's lights directly and emits the same `TrafficLight` objects. Only the source changes at M5.
+- A light on the map whose state perception can't read is `unknown`. Planner v0 treats it as red, so a perception miss never reads as permission to go.
+- `av_core.types.TrafficLight` replaces the earlier `light` and `stop_line` fields. The planner now decides which lights apply to the ego by checking each stop line against the route.
+
+**Checks to make early:** how noisy GNSS and IMU are; whether CARLA's OpenDRIVE files carry signal and stop-line records complete enough to use; and whether `GlobalRoutePlanner`, which uses CARLA's live map, is allowed for densifying the route or whether it must be done from the OpenDRIVE string.
 
 ## Milestones
 
@@ -67,7 +92,7 @@ The package gate after M4 is also the natural moment to resubmit to Waymo with t
 
 Your own nodes drive a Leaderboard route on ground truth, recorded and replayable.
 
-- [ ] Freeze `av_interfaces`: `WorldModel` (agents with id, class, pose, velocity, size; occluded regions), `PredictedTrajectoryArray`, `PlannerCommand`.
+- [ ] Freeze `av_interfaces`: `WorldModel` (agents with id, class, pose, velocity, size; occluded regions; traffic lights with id, state and stop line), `PredictedTrajectoryArray`, `PlannerCommand`.
 - [ ] `av_harness`: a Leaderboard agent that republishes sensors, `/clock` and a ground-truth `WorldModel` to ROS, and waits for the control matching the current frame (timeout plus logged miss).
 - [ ] `av_control`: pure pursuit plus PID speed control.
 - [ ] Rule-based planner v0: follow the route, stop for lead objects, obey lights (ground truth for now).
@@ -120,6 +145,7 @@ Perception replaces ground truth behind the same `WorldModel`.
 - [ ] LiDAR-to-camera fusion using CARLA's exact calibration.
 - [ ] SORT-style tracker: Kalman filter per object plus Hungarian assignment.
 - [ ] Occluded regions from perceived parked vehicles; traffic-light state from YOLO crops.
+- [ ] MAP track inputs (see MAP track): OpenDRIVE parsing, localization against the map, and the map-to-light join.
 - [ ] Re-run the M4 sweep on perception and report the gap to ground truth.
 
 **Visible result:** tracked boxes and occluded regions in Foxglove, and the ground-truth vs perception table. **Fallback at 55 h:** per-frame fused detections with velocity by differencing.
@@ -132,7 +158,7 @@ The Kalman tracker runs as an `rclcpp` node on the same topics, matching the Pyt
 
 ### M7: Leaderboard evaluation (40 h, about late Sep 2027)
 
-- [ ] Package the agent for the SENSORS track (no privileged information), in Docker.
+- [ ] Package the agent for the MAP track (sensors plus the OpenDRIVE map, no privileged actor information), in Docker.
 - [ ] Local runs on routes containing the target scenarios: driving score, infraction breakdown, per-scenario results, AIF vs rule-based.
 - [ ] Submit if submissions are open; otherwise run Bench2Drive Dev10.
 
@@ -176,6 +202,7 @@ Rule of thumb: if a PR touches a probability, a matrix or a frame transform, you
 | Leaderboard 2.x targets CARLA 0.9.15; you run 0.9.16 | Bench2Drive already ran cleanly on 0.9.16. State the version in any reported numbers. |
 | The AIF toy doesn't reproduce slow, look, resume | 30-hour cap in M3, then ship the toy video and evaluate the rule-based planner only. |
 | Harness-to-ROS sync drops or delays controls | Frame-matched control with a timeout and logged misses, built in M1. |
+| MAP track details are unverified: GNSS/IMU noise, how complete CARLA's OpenDRIVE signal and stop-line records are, and whether `GlobalRoutePlanner` is allowed for route densification | Check all three at the start of M1 or M2, before the harness and the contract are frozen. |
 | Perception eats the year | Fallback in M5: per-frame fused detections, velocity by differencing. Ground truth keeps the AIF comparison valid. |
 | ROS 2 on the M1 MacBook is painful | Don't install it. Read bags with the `mcap` Python libraries and view them in the Foxglove app. |
 | Claude-written code you can't explain in an interview | The review rule in Who writes what. |
@@ -195,6 +222,7 @@ All made on 2026-10-07.
 | Laptop work via a toy sim and MCAP replay, no ROS on the Mac | Work away from the desktop |
 | One C++ milestone | Full-stack AV roles expect it |
 | Writeup only after the work is done | Your preference |
+| Target the MAP track, not SENSORS (2026-10-08) | Your preference. It adds the OpenDRIVE map as an input, so traffic lights carry an id and a stop-line segment from the map, and localization and a map module become work items |
 
 ## Retired from earlier plans
 

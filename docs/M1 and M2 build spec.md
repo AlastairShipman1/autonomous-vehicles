@@ -54,10 +54,11 @@ EgoState(x, y, yaw, speed, length, width, wheelbase)
 Agent(id: int, cls: 'vehicle' | 'pedestrian' | 'cyclist',
       x, y, yaw, vx, vy, length, width, is_static: bool)
 OccludedRegion(occluder_id: int, polygon: (K, 2) array)       # empty in M1, filled by the toy sim in M2
+TrafficLight(id: int, state: 'red' | 'yellow' | 'green' | 'unknown',
+             stop_line: (2, 2) array)                          # the stop line's two endpoints
 WorldModel(stamp, ego: EgoState, agents: tuple[Agent, ...],
            occluded: tuple[OccludedRegion, ...],
-           light: 'none' | 'red' | 'yellow' | 'green',
-           stop_line: (2,) array | None)                       # stop line of the light affecting ego
+           traffic_lights: tuple[TrafficLight, ...])           # every known light; consumers decide which apply
 Route(points: (N, 2) array, speed_limit: float)                # densified to 0.5 m spacing
 PredictedTrajectory(agent_id, t: (H,) array, xy: (H, 2) array, prob: float = 1.0)
 PlannerCommand(stamp, target_speed, reason: str)               # reason: 'route' | 'lead' | 'light' | 'conflict' | 'occlusion'
@@ -66,6 +67,7 @@ ControlCommand(stamp, throttle, brake, steer)                  # CARLA ranges: [
 
 Conventions:
 
+- **Enums.** `Agent.cls`, `TrafficLight.state` and `PlannerCommand.reason` are `StrEnum`s (`AgentClass`, `TrafficLightState`, `PlannerReason`) whose values are the lowercase strings shown above, so dicts and ROS `string` fields are unchanged. `unknown` means the light exists on the map but its state is not observed; planner v0 treats it as red.
 - **Frame.** One `map` frame, right-handed, x and y in metres, yaw in radians counter-clockwise from +x, speeds in m/s, time in seconds.
 - **CARLA is left-handed.** Convert only at the harness boundary: y = −y\_carla, vy = −vy\_carla, yaw = −radians(yaw\_carla). Nothing else in the codebase knows about CARLA's frame.
 - **Rate.** 20 Hz (dt = 0.05 s), the Leaderboard's fixed step. The toy sim uses the same dt so tuned parameters carry over.
@@ -88,7 +90,7 @@ Nine PRs; the four laptop ones can all land before the first desktop session. M1
 | 1.8 | `foxglove_bridge`, markers (route, agent boxes, target speed and reason), saved layout, `tools/record.sh` (MCAP) | Desktop | Claude | 2 | Layout in the repo opens a recorded bag correctly |
 | 1.9 | End-to-end run on route 24206: retune gains in CARLA, record the clip, check whether Leaderboard 2.1 submissions are open | Desktop | You | 3 | Route completed, no collisions or red-light infractions, clip saved |
 
-The harness uses CARLA's privileged actor list for ground truth. That's fine for local runs; a SENSORS-track submission forbids it, which is what M5's perception replaces.
+The harness uses CARLA's privileged actor list for ground truth. That's fine for local runs; a Leaderboard submission on either track forbids it, which is what M5's perception replaces.
 
 ## M1 specs
 
@@ -98,7 +100,7 @@ Starting values below are guesses to tune, not results; the tests check behaviou
 
 - Subclass the Leaderboard `AutonomousAgent`. `sensors()` declares one front RGB camera and one LiDAR (published for Foxglove now, used in M5).
 - `set_global_plan` gives a sparse route. If any spacing exceeds 2 m, densify it with CARLA's `GlobalRoutePlanner` at 1 m, then resample to 0.5 m. Publish once on `/route`.
-- Each `run_step`: build the WorldModel from the actor list (vehicles and walkers within 60 m, `is_static` for parked vehicles), the light affecting ego and its stop line. Convert frames, then publish `/clock`, sensors and `/world_model`.
+- Each `run_step`: build the WorldModel from the actor list (vehicles and walkers within 60 m, `is_static` for parked vehicles) and every traffic light within 60 m with its state and stop line. Convert frames, then publish `/clock`, sensors and `/world_model`.
 - Block until a `/control_cmd` with the matching stamp arrives, up to 0.5 s wall time. On a miss, reapply the previous command, increment a counter and log the stamp. Never step the sim with a stale command silently.
 - Run `rclpy` in a background executor thread inside the agent process; the Leaderboard owns the main thread.
 
@@ -120,7 +122,7 @@ v_{\text{lead}} = \sqrt{2\, b\, \max(0,\ s_{\text{lead}} - d_0)}, \qquad b = 3\ 
 
 - κ(s) is the route curvature from the resampled points; s₀ is ego's arc-length position (closest point).
 - s\_lead is the arc length to the nearest agent ahead whose lateral offset from the route is below half the ego width plus half its width plus 0.3 m.
-- v\_light uses the same formula as v\_lead, with the stop line in place of the lead and d₀ = 2 m, when the light is red or yellow and ego can still stop at b. Otherwise it is infinite.
+- v\_light uses the same formula as v\_lead, with the stop line in place of the lead and d₀ = 2 m, for each light that is not green (red, yellow or unknown), whose stop-line midpoint is within 2 m of the route (others control other lanes), and that ego can still stop at b. The nearest such light binds; with none, v\_light is infinite.
 
 ### Controller (PR 1.3)
 

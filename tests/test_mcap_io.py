@@ -3,7 +3,16 @@ import pytest
 
 from av_core.control import Controller
 from av_core.plan import RuleBasedPlanner, RuleBasedPlannerV1
-from av_core.types import Agent, EgoState, PlannerCommand, WorldModel
+from av_core.types import (
+    Agent,
+    AgentClass,
+    EgoState,
+    PlannerCommand,
+    PlannerReason,
+    TrafficLight,
+    TrafficLightState,
+    WorldModel,
+)
 from av_sim_toy import ScenarioParams, ToySim
 from tests.mcap_fixture import write_bag
 from tools import mcap_io
@@ -38,7 +47,7 @@ def test_world_models_round_trip_through_the_bag(bag):
     assert len(back) == len(worlds)
     for a, b in zip(back, worlds):
         assert a.stamp == pytest.approx(b.stamp, abs=1e-9)
-        assert a.ego == b.ego and a.agents == b.agents and a.light == b.light
+        assert a.ego == b.ego and a.agents == b.agents and a.traffic_lights == b.traffic_lights
         assert [o.occluder_id for o in a.occluded] == [o.occluder_id for o in b.occluded]
         for oa, ob in zip(a.occluded, b.occluded):
             assert np.array_equal(oa.polygon, ob.polygon)
@@ -101,9 +110,11 @@ def test_cli_exit_codes(bag, tmp_path, capsys):
     assert mcap_io.main([str(path), "--route", str(rj)]) == 0
 
 
-def test_stop_line_and_light_round_trip(tmp_path):
+def test_traffic_lights_round_trip(tmp_path):
     ego = EgoState(0, 0, 0, 5.0, 4.7, 1.9, 2.9)
-    w = WorldModel(1.25, ego, (Agent(3, "cyclist", 5, 1, 0, 2, 0, 1.8, 0.6, False),), (), "red", np.array([20.0, 0.0]))
-    path = write_bag(tmp_path / "light.mcap", [w], [PlannerCommand(1.25, 3.0, "light")], None)
+    w = WorldModel(1.25, ego, (Agent(3, AgentClass.CYCLIST, 5, 1, 0, 2, 0, 1.8, 0.6, False),), (),
+                   (TrafficLight(7, TrafficLightState.RED, [[20.0, -1.75], [20.0, 1.75]]),
+                    TrafficLight(9, TrafficLightState.GREEN, [[50.0, 2.0], [50.0, 5.0]])))
+    path = write_bag(tmp_path / "light.mcap", [w], [PlannerCommand(1.25, 3.0, PlannerReason.LIGHT)], None)
     (back,) = mcap_io.read_world_models(path)
-    assert back.light == "red" and np.array_equal(back.stop_line, [20.0, 0.0]) and back.agents[0].cls == "cyclist"
+    assert back.traffic_lights == w.traffic_lights and back.agents[0].cls is AgentClass.CYCLIST

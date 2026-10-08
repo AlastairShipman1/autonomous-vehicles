@@ -2,17 +2,17 @@ import numpy as np
 import pytest
 
 from av_core.predict import ConstantVelocityPredictor
-from av_core.types import Agent, EgoState, WorldModel
+from av_core.types import Agent, AgentClass, EgoState, WorldModel
 
 EGO = EgoState(0, 0, 0, 10, 4.7, 1.9, 2.9)
 
 
 def world(*agents):
-    return WorldModel(2.0, EGO, tuple(agents), (), "none", None)
+    return WorldModel(2.0, EGO, tuple(agents), (), ())
 
 
 def agent(id=1, x=0.0, y=0.0, vx=0.0, vy=0.0, static=False):
-    return Agent(id, "pedestrian", x, y, 0.0, vx, vy, 0.6, 0.6, static)
+    return Agent(id, AgentClass.PEDESTRIAN, x, y, 0.0, vx, vy, 0.6, 0.6, static)
 
 
 def test_horizon_and_steps():

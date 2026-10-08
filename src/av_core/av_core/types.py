@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, fields
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import SupportsFloat, cast
 
 import numpy as np
@@ -19,9 +20,26 @@ from numpy.typing import ArrayLike
 # What ``to_dict`` produces: plain data a JSON encoder accepts.
 type Json = None | bool | int | float | str | list[Json] | dict[str, Json]
 
-AGENT_CLASSES = ("vehicle", "pedestrian", "cyclist")
-LIGHT_STATES = ("none", "red", "yellow", "green")
-PLANNER_REASONS = ("route", "lead", "light", "conflict", "occlusion")
+# The values are the lowercase strings used in dicts and ROS messages, so the wire format is plain text.
+class AgentClass(StrEnum):
+    VEHICLE = "vehicle"
+    PEDESTRIAN = "pedestrian"
+    CYCLIST = "cyclist"
+
+
+class TrafficLightState(StrEnum):
+    RED = "red"
+    YELLOW = "yellow"
+    GREEN = "green"
+    UNKNOWN = "unknown"  # the light exists (it is on the map) but its state is not observed
+
+
+class PlannerReason(StrEnum):
+    ROUTE = "route"
+    LEAD = "lead"
+    LIGHT = "light"
+    CONFLICT = "conflict"
+    OCCLUSION = "occlusion"
 
 
 def _scalar(name: str, value: SupportsFloat | str, *, lo: float = -math.inf, hi: float = math.inf,
@@ -48,10 +66,12 @@ def _array(name: str, value: ArrayLike, shape: tuple[int | None, ...]) -> np.nda
     return a
 
 
-def _choice(name: str, value: str, allowed: tuple[str, ...]) -> str:
-    if value not in allowed:
-        raise ValueError(f"{name} must be one of {allowed}, got {value!r}")
-    return value
+def _enum[E: StrEnum](name: str, value: str, kind: type[E]) -> E:
+    """``value`` as a member of ``kind``; accepts the member itself or its string value."""
+    try:
+        return kind(value)
+    except ValueError:
+        raise ValueError(f"{name} must be one of {[m.value for m in kind]}, got {value!r}") from None
 
 
 def _set(obj: object, **kw: object) -> None:
@@ -74,6 +94,8 @@ class _Contract:
 
 
 def _to_plain(v: object) -> Json:
+    if isinstance(v, StrEnum):
+        return v.value
     if isinstance(v, _Contract):
         return v.to_dict()
     if isinstance(v, np.ndarray):
@@ -105,6 +127,17 @@ class EgoState(_Contract):
             wheelbase=_scalar("wheelbase", self.wheelbase, lo=0.0, lo_open=True),
         )
 
+    @property
+    def velocity(self) -> np.ndarray:
+        """(vx, vy) in the map frame, assuming the velocity points along ``yaw`` (no sideslip).
+
+        Exact for the kinematic bicycle model; an approximation once tyre slip matters. Keep that
+        assumption here so a better model changes one property. ``speed`` is validated >= 0 today
+        (no reversing); if reversing is added, ``speed`` becomes signed longitudinal velocity and this
+        property stays correct unchanged.
+        """
+        return self.speed * np.array([math.cos(self.yaw), math.sin(self.yaw)])
+
     @classmethod
     def from_dict(cls, d: Mapping[str, object]) -> EgoState:
         return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
@@ -113,7 +146,7 @@ class EgoState(_Contract):
 @dataclass(frozen=True, eq=False)
 class Agent(_Contract):
     id: int
-    cls: str
+    cls: AgentClass
     x: float
     y: float
     yaw: float
@@ -129,7 +162,7 @@ class Agent(_Contract):
         _set(
             self,
             id=int(self.id),
-            cls=_choice("cls", self.cls, AGENT_CLASSES),
+            cls=_enum("cls", self.cls, AgentClass),
             x=_scalar("x", self.x),
             y=_scalar("y", self.y),
             yaw=_scalar("yaw", self.yaw),
@@ -139,6 +172,11 @@ class Agent(_Contract):
             width=_scalar("width", self.width, lo=0.0, lo_open=True),
             is_static=bool(self.is_static),
         )
+
+    @property
+    def velocity(self) -> np.ndarray:
+        """(vx, vy) in the map frame. Independent of ``yaw``: a tracked object need not move the way it faces."""
+        return np.array([self.vx, self.vy])
 
     @classmethod
     def from_dict(cls, d: Mapping[str, object]) -> Agent:
@@ -162,33 +200,61 @@ class OccludedRegion(_Contract):
 
 
 @dataclass(frozen=True, eq=False)
+class TrafficLight(_Contract):
+    """One signal: its id (from the map), current state, and the stop line it controls.
+
+    ``stop_line`` is the segment's two endpoints. Whether a light applies to ego is the consumer's call
+    (planner v0 checks the stop line against the route); the producer reports every light it knows about.
+    """
+
+    id: int
+    state: TrafficLightState
+    stop_line: np.ndarray  # (2, 2): endpoints of the stop line
+
+    def __post_init__(self) -> None:
+        if isinstance(self.id, bool) or not isinstance(self.id, (int, np.integer)):
+            raise ValueError(f"id must be an int, got {self.id!r}")
+        line = _array("stop_line", self.stop_line, (2, 2))
+        if np.array_equal(line[0], line[1]):
+            raise ValueError("stop_line endpoints must differ")
+        _set(self, id=int(self.id), state=_enum("state", self.state, TrafficLightState), stop_line=line)
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, object]) -> TrafficLight:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
+
+
+@dataclass(frozen=True, eq=False)
 class WorldModel(_Contract):
     stamp: float
     ego: EgoState
     agents: tuple[Agent, ...]
     occluded: tuple[OccludedRegion, ...]
-    light: str
-    stop_line: np.ndarray | None  # (2,): stop line of the light affecting ego
+    traffic_lights: tuple[TrafficLight, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.ego, EgoState):
             raise ValueError("ego must be an EgoState")
         agents, occluded = tuple(self.agents), tuple(self.occluded)
+        lights = tuple(self.traffic_lights)
         if not all(isinstance(a, Agent) for a in agents):
             raise ValueError("agents must all be Agent")
         if not all(isinstance(o, OccludedRegion) for o in occluded):
             raise ValueError("occluded must all be OccludedRegion")
+        if not all(isinstance(t, TrafficLight) for t in lights):
+            raise ValueError("traffic_lights must all be TrafficLight")
         ids = [a.id for a in agents]
         if len(set(ids)) != len(ids):
             raise ValueError("agent ids must be unique")
-        stop = None if self.stop_line is None else _array("stop_line", self.stop_line, (2,))
+        light_ids = [t.id for t in lights]
+        if len(set(light_ids)) != len(light_ids):
+            raise ValueError("traffic light ids must be unique")
         _set(
             self,
             stamp=_scalar("stamp", self.stamp),
             agents=agents,
             occluded=occluded,
-            light=_choice("light", self.light, LIGHT_STATES),
-            stop_line=stop,
+            traffic_lights=lights,
         )
 
     @classmethod
@@ -198,8 +264,8 @@ class WorldModel(_Contract):
             ego=EgoState.from_dict(cast(Mapping[str, object], d["ego"])),
             agents=tuple(Agent.from_dict(a) for a in cast(list[Mapping[str, object]], d["agents"])),
             occluded=tuple(OccludedRegion.from_dict(o) for o in cast(list[Mapping[str, object]], d["occluded"])),
-            light=cast(str, d["light"]),
-            stop_line=cast("np.ndarray | None", d["stop_line"]),  # validated in __post_init__
+            traffic_lights=tuple(
+                TrafficLight.from_dict(t) for t in cast(list[Mapping[str, object]], d["traffic_lights"])),
         )
 
 
@@ -244,14 +310,14 @@ class PredictedTrajectory(_Contract):
 class PlannerCommand(_Contract):
     stamp: float
     target_speed: float
-    reason: str
+    reason: PlannerReason
 
     def __post_init__(self) -> None:
         _set(
             self,
             stamp=_scalar("stamp", self.stamp),
             target_speed=_scalar("target_speed", self.target_speed, lo=0.0),
-            reason=_choice("reason", self.reason, PLANNER_REASONS),
+            reason=_enum("reason", self.reason, PlannerReason),
         )
 
     @classmethod

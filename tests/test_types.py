@@ -5,12 +5,16 @@ import pytest
 
 from av_core.types import (
     Agent,
+    AgentClass,
     ControlCommand,
     EgoState,
     OccludedRegion,
     PlannerCommand,
+    PlannerReason,
     PredictedTrajectory,
     Route,
+    TrafficLight,
+    TrafficLightState,
     WorldModel,
 )
 
@@ -19,14 +23,16 @@ AGENT = dict(id=1, cls="vehicle", x=10.0, y=-2.75, yaw=0.0, vx=0.0, vy=0.0,
              length=4.5, width=2.0, is_static=True)
 
 
-def make_world(stop_line=None):
+LIGHT = dict(id=7, state="red", stop_line=[[20.0, -1.75], [20.0, 1.75]])
+
+
+def make_world(lights=()):
     return WorldModel(
         stamp=1.5,
         ego=EgoState(**EGO),
         agents=(Agent(**AGENT), Agent(**{**AGENT, "id": 2, "cls": "pedestrian", "is_static": False})),
         occluded=(OccludedRegion(1, [[0, 0], [50, 0], [50, -10]]),),
-        light="red",
-        stop_line=stop_line,
+        traffic_lights=tuple(lights),
     )
 
 
@@ -35,7 +41,8 @@ ALL = [
     Agent(**AGENT),
     OccludedRegion(3, [[0, 0], [1, 0], [1, 1]]),
     make_world(),
-    make_world(stop_line=[20.0, 0.0]),
+    TrafficLight(**LIGHT),
+    make_world(lights=[TrafficLight(**LIGHT), TrafficLight(**{**LIGHT, "id": 8, "state": "green"})]),
     Route([[0, 0], [0.5, 0], [1, 0]], 13.9),
     PredictedTrajectory(4, [0.1, 0.2, 0.3], [[0, 0], [1, 0], [2, 0]], 0.5),
     PlannerCommand(1.0, 8.0, "lead"),
@@ -117,11 +124,39 @@ def test_rejects_bad_ranges():
 def test_world_model_validation():
     ego = EgoState(**EGO)
     with pytest.raises(ValueError):
-        WorldModel(0.0, ego, (), (), "blue", None)
+        WorldModel(0.0, ego, (Agent(**AGENT), Agent(**AGENT)), (), ())
+    light = TrafficLight(**LIGHT)
+    with pytest.raises(ValueError):  # duplicate light ids
+        WorldModel(0.0, ego, (), (), (light, light))
     with pytest.raises(ValueError):
-        WorldModel(0.0, ego, (Agent(**AGENT), Agent(**AGENT)), (), "none", None)
-    with pytest.raises(ValueError):
-        WorldModel(0.0, ego, (), (), "none", [1.0, 2.0, 3.0])
+        WorldModel(0.0, ego, (), (), ("red",))  # type: ignore[arg-type]
+
+
+def test_enum_fields_accept_strings_and_serialise_as_plain_strings():
+    light = TrafficLight(**LIGHT)  # state given as "red"
+    assert light.state is TrafficLightState.RED
+    assert light.to_dict()["state"] == "red" and type(light.to_dict()["state"]) is str
+    assert Agent(**AGENT).cls is AgentClass.VEHICLE
+    assert PlannerCommand(0.0, 1.0, "lead").reason is PlannerReason.LEAD
+    assert TrafficLight(**{**LIGHT, "state": "unknown"}).state is TrafficLightState.UNKNOWN
+
+
+def test_traffic_light_validation():
+    for kw in ({"state": "blue"}, {"state": "none"}, {"id": True}, {"id": 1.5},
+               {"stop_line": [20.0, 0.0]},  # a point, not a segment
+               {"stop_line": [[20.0, 0.0], [20.0, 0.0]]},  # zero-length
+               {"stop_line": [[20.0, math.nan], [20.0, 1.0]]}):
+        with pytest.raises(ValueError):
+            TrafficLight(**{**LIGHT, **kw})
+
+
+def test_velocity_is_a_derived_vector_not_a_serialised_field():
+    ego = EgoState(**{**EGO, "yaw": math.pi / 2, "speed": 3.0})
+    assert ego.velocity == pytest.approx([0.0, 3.0], abs=1e-12)
+    assert EgoState(**EGO).velocity == pytest.approx([5.0, 0.0])  # yaw 0
+    agent = Agent(**{**AGENT, "yaw": math.pi / 2, "vx": 1.0, "vy": -2.0})  # faces +y, moves (1, -2)
+    assert agent.velocity.tolist() == [1.0, -2.0]
+    assert "velocity" not in ego.to_dict() and "velocity" not in agent.to_dict()
 
 
 def test_frozen():

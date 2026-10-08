@@ -6,7 +6,8 @@ install is needed.
 **Assumed message layout.** The ``av_interfaces`` messages are not in this repo yet, so the converters assume they
 mirror ``av_core.types`` field for field (names as in the spec), with ``stamp`` a ``builtin_interfaces/Time`` (or
 under ``header``). Polygons, routes and the stop line may be flat ``float64[]`` (x0, y0, x1, y1, ...), a list of
-``[x, y]`` pairs, or a list of objects with ``x`` and ``y``; an empty ``stop_line`` means none. If the real
+``[x, y]`` pairs, or a list of objects with ``x`` and ``y``. ``traffic_lights`` is an array of
+``{id, state, stop_line}`` where ``stop_line`` holds the segment's two endpoints. If the real
 messages differ, the places to change are the ``*_from_msg`` functions below.
 
 Topics: ``/world_model`` and ``/planner_cmd`` as specified, and ``/route`` for the route. Planner v0 needs a route
@@ -31,7 +32,18 @@ from mcap.reader import make_reader
 from mcap_ros2.decoder import DecoderFactory
 
 from av_core.protocols import Planner
-from av_core.types import Agent, EgoState, OccludedRegion, PlannerCommand, Route, WorldModel
+from av_core.types import (
+    Agent,
+    AgentClass,
+    EgoState,
+    OccludedRegion,
+    PlannerCommand,
+    PlannerReason,
+    Route,
+    TrafficLight,
+    TrafficLightState,
+    WorldModel,
+)
 
 WORLD_MODEL_TOPIC = "/world_model"
 PLANNER_CMD_TOPIC = "/planner_cmd"
@@ -94,12 +106,17 @@ class _OccludedMsg(Protocol):
     polygon: _Points
 
 
+class _TrafficLightMsg(Protocol):
+    id: int
+    state: str
+    stop_line: _Points
+
+
 class _WorldModelMsg(Protocol):
     ego: _EgoMsg
     agents: Sequence[_AgentMsg]
     occluded: Sequence[_OccludedMsg]
-    light: str
-    stop_line: _Points
+    traffic_lights: Sequence[_TrafficLightMsg]
 
 
 class _PlannerCommandMsg(Protocol):
@@ -142,16 +159,16 @@ def world_model_from_msg(msg: _WorldModelMsg) -> WorldModel:
     e = msg.ego
     ego = EgoState(e.x, e.y, e.yaw, e.speed, e.length, e.width, e.wheelbase)
     agents = tuple(
-        Agent(int(a.id), a.cls, a.x, a.y, a.yaw, a.vx, a.vy, a.length, a.width, bool(a.is_static))
+        Agent(int(a.id), AgentClass(a.cls), a.x, a.y, a.yaw, a.vx, a.vy, a.length, a.width, bool(a.is_static))
         for a in msg.agents
     )
     occluded = tuple(OccludedRegion(int(o.occluder_id), _xy(o.polygon)) for o in msg.occluded)
-    stop = _xy(msg.stop_line)
-    return WorldModel(_stamp(msg), ego, agents, occluded, msg.light, None if len(stop) == 0 else stop.reshape(2))
+    lights = tuple(TrafficLight(int(t.id), TrafficLightState(t.state), _xy(t.stop_line)) for t in msg.traffic_lights)
+    return WorldModel(_stamp(msg), ego, agents, occluded, lights)
 
 
 def planner_command_from_msg(msg: _PlannerCommandMsg) -> PlannerCommand:
-    return PlannerCommand(_stamp(msg), float(msg.target_speed), msg.reason)
+    return PlannerCommand(_stamp(msg), float(msg.target_speed), PlannerReason(msg.reason))
 
 
 def route_from_msg(msg: _RouteMsg) -> Route:

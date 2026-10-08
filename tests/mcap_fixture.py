@@ -21,13 +21,15 @@ DEFS = {
                                 "float64 length\nfloat64 width\nbool is_static\n"),
     "av_interfaces/msg/OccludedRegion": "int32 occluder_id\nfloat64[] polygon\n",
     "av_interfaces/msg/WorldModel": ("builtin_interfaces/Time stamp\nav_interfaces/EgoState ego\nav_interfaces/Agent[] agents\n"
-                                     "av_interfaces/OccludedRegion[] occluded\nstring light\nfloat64[] stop_line\n"),
+                                     "av_interfaces/OccludedRegion[] occluded\nav_interfaces/TrafficLight[] traffic_lights\n"),
+    "av_interfaces/msg/TrafficLight": "int32 id\nstring state\nfloat64[] stop_line\n",
     "av_interfaces/msg/PlannerCommand": "builtin_interfaces/Time stamp\nfloat64 target_speed\nstring reason\n",
     "av_interfaces/msg/Route": "float64[] points\nfloat64 speed_limit\n",
 }
 DEPS = {
     "av_interfaces/msg/WorldModel": ["builtin_interfaces/msg/Time", "av_interfaces/msg/EgoState",
-                                     "av_interfaces/msg/Agent", "av_interfaces/msg/OccludedRegion"],
+                                     "av_interfaces/msg/Agent", "av_interfaces/msg/OccludedRegion",
+                                     "av_interfaces/msg/TrafficLight"],
     "av_interfaces/msg/PlannerCommand": ["builtin_interfaces/msg/Time"],
 }
 
@@ -52,8 +54,8 @@ def world_msg(w: WorldModel) -> dict:
         "agents": [dict(id=a.id, cls=a.cls, x=a.x, y=a.y, yaw=a.yaw, vx=a.vx, vy=a.vy, length=a.length,
                         width=a.width, is_static=a.is_static) for a in w.agents],
         "occluded": [dict(occluder_id=o.occluder_id, polygon=o.polygon.reshape(-1).tolist()) for o in w.occluded],
-        "light": w.light,
-        "stop_line": [] if w.stop_line is None else w.stop_line.tolist(),
+        "traffic_lights": [dict(id=t.id, state=t.state, stop_line=t.stop_line.reshape(-1).tolist())
+                           for t in w.traffic_lights],
     }
 
 

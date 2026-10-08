@@ -21,7 +21,7 @@ from av_core.geometry import (
 )
 from av_core.protocols import Planner, Predictor
 from av_core.sweep.record import Outcome
-from av_core.types import Agent, ControlCommand, EgoState, OccludedRegion, PredictedTrajectory, Route, WorldModel
+from av_core.types import Agent, AgentClass, ControlCommand, EgoState, OccludedRegion, PredictedTrajectory, Route, WorldModel
 from av_sim_toy import scenario as sc
 from av_sim_toy.scenario import ScenarioParams
 
@@ -85,17 +85,17 @@ class ToySim:
     def world_model(self) -> WorldModel:
         s, p = self.state, self.params
         ego = EgoState(s.x, s.y, s.yaw, s.speed, sc.EGO_LENGTH, sc.EGO_WIDTH, sc.EGO_WHEELBASE)
-        agents = [Agent(OCCLUDER_ID, "vehicle", p.occluder_x, sc.PARKING_CENTER_Y, 0.0, 0.0, 0.0,
+        agents = [Agent(OCCLUDER_ID, AgentClass.VEHICLE, p.occluder_x, sc.PARKING_CENTER_Y, 0.0, 0.0, 0.0,
                         p.occluder_length, sc.OCCLUDER_WIDTH, True)]
         if self.ped_visible():
             xy = self.ped_xy()
             assert xy is not None  # ped_visible() implies the pedestrian is present
             vy = p.ped_speed if self.ped_walking() else 0.0
-            agents.append(Agent(PED_ID, "pedestrian", xy[0], xy[1], math.pi / 2, 0.0, vy,
+            agents.append(Agent(PED_ID, AgentClass.PEDESTRIAN, xy[0], xy[1], math.pi / 2, 0.0, vy,
                                 2 * sc.PED_RADIUS, 2 * sc.PED_RADIUS, False))
         shadow = shadow_polygon(self.ego_front(), self._occluder, SENSOR_RANGE)
         occluded = () if shadow is None else (OccludedRegion(OCCLUDER_ID, shadow),)
-        return WorldModel(self.time, ego, tuple(agents), occluded, "none", None)
+        return WorldModel(self.time, ego, tuple(agents), occluded, ())
 
     def step(self, cmd: ControlCommand, max_steer_angle: float) -> None:
         """Advance one dt under ``cmd`` and update the episode outcome."""
