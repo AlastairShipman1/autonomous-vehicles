@@ -27,7 +27,7 @@ class RuleBasedPlanner:
     lead_standoff: float = 6.0  # m
     light_standoff: float = 2.0  # m
     lane_margin: float = 0.3  # m, added to the half-widths for the "in my path" test
-    _frame_cache: tuple | None = field(default=None, init=False, repr=False, compare=False)
+    _frame_cache: tuple[Route, RouteFrame] | None = field(default=None, init=False, repr=False, compare=False)
 
     def frame_for(self, route: Route) -> RouteFrame:
         """RouteFrame for ``route``, reused while the same Route object is passed in (one per episode)."""
@@ -40,7 +40,7 @@ class RuleBasedPlanner:
         """``predictions`` is ignored here; it keeps the signature shared with planner v1."""
         frame = self.frame_for(route)
         limits = self.limits(world, route, frame, predictions)
-        reason = min(limits, key=limits.get)  # dict order breaks ties: safety limits first
+        reason = min(limits, key=limits.__getitem__)  # dict order breaks ties: safety limits first
         return PlannerCommand(world.stamp, limits[reason], reason)
 
     def limits(self, world: WorldModel, route: Route, frame: RouteFrame | None = None,

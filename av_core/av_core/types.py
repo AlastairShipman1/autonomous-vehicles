@@ -10,16 +10,21 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, fields
-from typing import Any
+from collections.abc import Mapping
+from typing import SupportsFloat, cast
 
 import numpy as np
+from numpy.typing import ArrayLike
+
+# What ``to_dict`` produces: plain data a JSON encoder accepts.
+type Json = None | bool | int | float | str | list[Json] | dict[str, Json]
 
 AGENT_CLASSES = ("vehicle", "pedestrian", "cyclist")
 LIGHT_STATES = ("none", "red", "yellow", "green")
 PLANNER_REASONS = ("route", "lead", "light", "conflict", "occlusion")
 
 
-def _scalar(name: str, value: Any, *, lo: float = -math.inf, hi: float = math.inf,
+def _scalar(name: str, value: SupportsFloat | str, *, lo: float = -math.inf, hi: float = math.inf,
             lo_open: bool = False) -> float:
     try:
         v = float(value)
@@ -32,7 +37,7 @@ def _scalar(name: str, value: Any, *, lo: float = -math.inf, hi: float = math.in
     return v
 
 
-def _array(name: str, value: Any, shape: tuple[int | None, ...]) -> np.ndarray:
+def _array(name: str, value: ArrayLike, shape: tuple[int | None, ...]) -> np.ndarray:
     a = np.array(value, dtype=np.float64)  # copies, so callers can't mutate our state
     ok = a.ndim == len(shape) and all(s is None or s == d for s, d in zip(shape, a.shape))
     if not ok:
@@ -43,13 +48,13 @@ def _array(name: str, value: Any, shape: tuple[int | None, ...]) -> np.ndarray:
     return a
 
 
-def _choice(name: str, value: Any, allowed: tuple[str, ...]) -> str:
+def _choice(name: str, value: str, allowed: tuple[str, ...]) -> str:
     if value not in allowed:
         raise ValueError(f"{name} must be one of {allowed}, got {value!r}")
     return value
 
 
-def _set(obj: Any, **kw: Any) -> None:
+def _set(obj: object, **kw: object) -> None:
     for k, v in kw.items():
         object.__setattr__(obj, k, v)
 
@@ -57,7 +62,7 @@ def _set(obj: Any, **kw: Any) -> None:
 class _Contract:
     """Equality and dict round-trip shared by all contract types."""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Json]:
         return {f.name: _to_plain(getattr(self, f.name)) for f in fields(self)}  # type: ignore[arg-type]
 
     def __eq__(self, other: object) -> bool:
@@ -68,14 +73,14 @@ class _Contract:
     __hash__ = None  # type: ignore[assignment]  # arrays are unhashable
 
 
-def _to_plain(v: Any) -> Any:
+def _to_plain(v: object) -> Json:
     if isinstance(v, _Contract):
         return v.to_dict()
     if isinstance(v, np.ndarray):
         return v.tolist()
     if isinstance(v, tuple):
-        return [_to_plain(x) for x in v]
-    return v
+        return [_to_plain(x) for x in cast(tuple[object, ...], v)]
+    return cast(Json, v)
 
 
 @dataclass(frozen=True, eq=False)
@@ -101,8 +106,8 @@ class EgoState(_Contract):
         )
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> EgoState:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> EgoState:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -136,8 +141,8 @@ class Agent(_Contract):
         )
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Agent:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> Agent:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -152,8 +157,8 @@ class OccludedRegion(_Contract):
         _set(self, occluder_id=int(self.occluder_id), polygon=poly)
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> OccludedRegion:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> OccludedRegion:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -187,14 +192,14 @@ class WorldModel(_Contract):
         )
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> WorldModel:
+    def from_dict(cls, d: Mapping[str, object]) -> WorldModel:
         return cls(
-            stamp=d["stamp"],
-            ego=EgoState.from_dict(d["ego"]),
-            agents=tuple(Agent.from_dict(a) for a in d["agents"]),
-            occluded=tuple(OccludedRegion.from_dict(o) for o in d["occluded"]),
-            light=d["light"],
-            stop_line=d["stop_line"],
+            stamp=cast(float, d["stamp"]),
+            ego=EgoState.from_dict(cast(Mapping[str, object], d["ego"])),
+            agents=tuple(Agent.from_dict(a) for a in cast(list[Mapping[str, object]], d["agents"])),
+            occluded=tuple(OccludedRegion.from_dict(o) for o in cast(list[Mapping[str, object]], d["occluded"])),
+            light=cast(str, d["light"]),
+            stop_line=cast("np.ndarray | None", d["stop_line"]),  # validated in __post_init__
         )
 
 
@@ -210,8 +215,8 @@ class Route(_Contract):
         _set(self, points=pts, speed_limit=_scalar("speed_limit", self.speed_limit, lo=0.0, lo_open=True))
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Route:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> Route:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -231,8 +236,8 @@ class PredictedTrajectory(_Contract):
         _set(self, agent_id=int(self.agent_id), t=t, xy=xy, prob=_scalar("prob", self.prob, lo=0.0, hi=1.0))
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> PredictedTrajectory:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> PredictedTrajectory:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -250,8 +255,8 @@ class PlannerCommand(_Contract):
         )
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> PlannerCommand:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> PlannerCommand:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -271,5 +276,5 @@ class ControlCommand(_Contract):
         )
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> ControlCommand:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> ControlCommand:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__

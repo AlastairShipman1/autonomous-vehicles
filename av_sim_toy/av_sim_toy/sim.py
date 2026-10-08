@@ -19,6 +19,8 @@ from av_core.geometry import (
     rect_corners,
     shadow_polygon,
 )
+from av_core.protocols import Planner, Predictor
+from av_core.sweep.record import Outcome
 from av_core.types import Agent, ControlCommand, EgoState, OccludedRegion, PredictedTrajectory, Route, WorldModel
 from av_sim_toy import scenario as sc
 from av_sim_toy.scenario import ScenarioParams
@@ -37,7 +39,7 @@ class ToySim:
         self.state = BicycleState(0.0, 0.0, 0.0, params.initial_speed)
         self.step_count = 0
         self.ped_trigger_step: int | None = None
-        self.outcome: str | None = None  # 'collision' | 'finished' | 'timeout'
+        self.outcome: Outcome | None = None
         self._occluder = rect_corners(params.occluder_x, sc.PARKING_CENTER_Y, 0.0,
                                       params.occluder_length, sc.OCCLUDER_WIDTH)
 
@@ -87,6 +89,7 @@ class ToySim:
                         p.occluder_length, sc.OCCLUDER_WIDTH, True)]
         if self.ped_visible():
             xy = self.ped_xy()
+            assert xy is not None  # ped_visible() implies the pedestrian is present
             vy = p.ped_speed if self.ped_walking() else 0.0
             agents.append(Agent(PED_ID, "pedestrian", xy[0], xy[1], math.pi / 2, 0.0, vy,
                                 2 * sc.PED_RADIUS, 2 * sc.PED_RADIUS, False))
@@ -111,7 +114,7 @@ class ToySim:
         xy = self.ped_xy()
         return xy is not None and distance_point_to_rect(self.ego_corners(), xy) <= sc.PED_RADIUS
 
-    def _check_end(self) -> str | None:
+    def _check_end(self) -> Outcome | None:
         if self.collided():
             return "collision"
         if self.ego_rear()[0] > self._occluder[:, 0].max() + sc.END_MARGIN:
@@ -136,38 +139,47 @@ class Episode:
     throttle: np.ndarray
     brake: np.ndarray
     steer: np.ndarray
-    outcome: str
+    outcome: Outcome
     final_ego: np.ndarray = field(default_factory=lambda: np.zeros(4))  # state after the last step
     final_ped: np.ndarray = field(default_factory=lambda: np.full(2, np.nan))
 
 
-def run_episode(params: ScenarioParams, planner, controller: Controller | None = None,
-                predictor=None, dt: float = sc.DT) -> Episode:
+def run_episode(params: ScenarioParams, planner: Planner, controller: Controller | None = None,
+                predictor: Predictor | None = None, dt: float = sc.DT) -> Episode:
     """Run one episode. ``planner.plan(world, route, predictions)``; ``predictor(world)`` is optional."""
     sim, ctl = ToySim(params, dt), controller or Controller()
-    rows: dict[str, list] = {k: [] for k in ("t", "ego", "ped", "vis", "tgt", "reason", "thr", "brk", "str")}
+    t: list[float] = []
+    ego: list[list[float]] = []
+    ped: list[np.ndarray] = []
+    vis: list[bool] = []
+    tgt: list[float] = []
+    reason: list[str] = []
+    thr: list[float] = []
+    brk: list[float] = []
+    steer: list[float] = []
     while not sim.done:
         world = sim.world_model()
         preds: tuple[PredictedTrajectory, ...] = predictor(world) if predictor else ()
         plan = planner.plan(world, sim.route, preds)
         cmd = ctl.step(world.stamp, world.ego, sim.route, plan.target_speed, dt)
-        ped = sim.ped_xy()
-        rows["t"].append(sim.time)
-        rows["ego"].append([sim.state.x, sim.state.y, sim.state.yaw, sim.state.speed])
-        rows["ped"].append([np.nan, np.nan] if ped is None else ped)
-        rows["vis"].append(sim.ped_visible())
-        rows["tgt"].append(plan.target_speed)
-        rows["reason"].append(plan.reason)
-        rows["thr"].append(cmd.throttle)
-        rows["brk"].append(cmd.brake)
-        rows["str"].append(cmd.steer)
+        ped_xy = sim.ped_xy()
+        t.append(sim.time)
+        ego.append([sim.state.x, sim.state.y, sim.state.yaw, sim.state.speed])
+        ped.append(np.array([np.nan, np.nan]) if ped_xy is None else ped_xy)
+        vis.append(sim.ped_visible())
+        tgt.append(plan.target_speed)
+        reason.append(plan.reason)
+        thr.append(cmd.throttle)
+        brk.append(cmd.brake)
+        steer.append(cmd.steer)
         sim.step(cmd, ctl.max_steer_angle)
+    assert sim.outcome is not None  # the loop only exits once the episode is done
     ped_end = sim.ped_xy()
     return Episode(
-        params=params, dt=dt, t=np.array(rows["t"]), ego=np.array(rows["ego"]), ped=np.array(rows["ped"]),
-        ped_visible=np.array(rows["vis"], dtype=bool), target_speed=np.array(rows["tgt"]),
-        reason=rows["reason"], throttle=np.array(rows["thr"]), brake=np.array(rows["brk"]),
-        steer=np.array(rows["str"]), outcome=sim.outcome,
+        params=params, dt=dt, t=np.array(t), ego=np.array(ego), ped=np.array(ped),
+        ped_visible=np.array(vis, dtype=bool), target_speed=np.array(tgt),
+        reason=reason, throttle=np.array(thr), brake=np.array(brk),
+        steer=np.array(steer), outcome=sim.outcome,
         final_ego=np.array([sim.state.x, sim.state.y, sim.state.yaw, sim.state.speed]),
         final_ped=np.full(2, np.nan) if ped_end is None else ped_end,
     )

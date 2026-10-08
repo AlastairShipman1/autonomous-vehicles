@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from av_core.geometry.visibility import point_in_convex
 
 
-def distance_point_to_rect(corners: np.ndarray, p) -> float:
+def distance_point_to_rect(corners: np.ndarray, p: ArrayLike) -> float:
     """Distance from a point to a convex counter-clockwise polygon; 0 inside or on the boundary."""
     p = np.asarray(p, dtype=np.float64)
     if point_in_convex(corners, p):

@@ -23,12 +23,14 @@ import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from collections.abc import Callable, Iterable, Sequence
+from typing import Protocol, cast, runtime_checkable
 
 import numpy as np
 from mcap.reader import make_reader
 from mcap_ros2.decoder import DecoderFactory
 
+from av_core.protocols import Planner
 from av_core.types import Agent, EgoState, OccludedRegion, PlannerCommand, Route, WorldModel
 
 WORLD_MODEL_TOPIC = "/world_model"
@@ -36,27 +38,107 @@ PLANNER_CMD_TOPIC = "/planner_cmd"
 ROUTE_TOPIC = "/route"
 
 
+# --- assumed message shapes (structural types; see the module docstring) -----------------------
+
+@runtime_checkable
+class _Time(Protocol):
+    sec: int
+    nanosec: int
+
+
+@runtime_checkable
+class _XY(Protocol):
+    x: float
+    y: float
+
+
+# A polygon / route / stop line: flat floats, a list of pairs, or a list of {x, y} objects.
+_Points = Sequence[float] | Sequence[Sequence[float]] | Sequence[_XY]
+
+
+@runtime_checkable
+class _HasStamp(Protocol):
+    stamp: _Time | float
+
+
+@runtime_checkable
+class _HasHeader(Protocol):
+    header: _HasStamp
+
+
+class _EgoMsg(Protocol):
+    x: float
+    y: float
+    yaw: float
+    speed: float
+    length: float
+    width: float
+    wheelbase: float
+
+
+class _AgentMsg(Protocol):
+    id: int
+    cls: str
+    x: float
+    y: float
+    yaw: float
+    vx: float
+    vy: float
+    length: float
+    width: float
+    is_static: bool
+
+
+class _OccludedMsg(Protocol):
+    occluder_id: int
+    polygon: _Points
+
+
+class _WorldModelMsg(Protocol):
+    ego: _EgoMsg
+    agents: Sequence[_AgentMsg]
+    occluded: Sequence[_OccludedMsg]
+    light: str
+    stop_line: _Points
+
+
+class _PlannerCommandMsg(Protocol):
+    target_speed: float
+    reason: str
+
+
+class _RouteMsg(Protocol):
+    points: _Points
+    speed_limit: float
+
+
 # --- message -> av_core ------------------------------------------------------------------------
 
-def _stamp(msg: Any) -> float:
-    s = msg.stamp if hasattr(msg, "stamp") else msg.header.stamp
-    if hasattr(s, "sec"):
+def _stamp(msg: object) -> float:
+    """Seconds from ``msg.stamp`` or ``msg.header.stamp`` (a Time struct or a plain number)."""
+    if isinstance(msg, _HasStamp):
+        s = msg.stamp
+    elif isinstance(msg, _HasHeader):
+        s = msg.header.stamp
+    else:
+        raise ValueError(f"message has neither stamp nor header.stamp: {msg!r}")
+    if isinstance(s, _Time):
         return float(s.sec) + 1e-9 * float(s.nanosec)
     return float(s)
 
 
-def _xy(seq: Any) -> np.ndarray:
+def _xy(seq: _Points) -> np.ndarray:
     """(K, 2) array from a flat float list, a list of pairs, or a list of objects with x and y."""
     items = list(seq)
     if not items:
         return np.zeros((0, 2))
-    if hasattr(items[0], "x"):
-        return np.array([[p.x, p.y] for p in items], dtype=np.float64)
-    arr = np.asarray(items, dtype=np.float64)
+    if isinstance(items[0], _XY):
+        return np.array([[p.x, p.y] for p in cast(Sequence[_XY], items)], dtype=np.float64)
+    arr = np.asarray(cast(Sequence[float], items), dtype=np.float64)
     return arr.reshape(-1, 2)
 
 
-def world_model_from_msg(msg: Any) -> WorldModel:
+def world_model_from_msg(msg: _WorldModelMsg) -> WorldModel:
     e = msg.ego
     ego = EgoState(e.x, e.y, e.yaw, e.speed, e.length, e.width, e.wheelbase)
     agents = tuple(
@@ -68,20 +150,21 @@ def world_model_from_msg(msg: Any) -> WorldModel:
     return WorldModel(_stamp(msg), ego, agents, occluded, msg.light, None if len(stop) == 0 else stop.reshape(2))
 
 
-def planner_command_from_msg(msg: Any) -> PlannerCommand:
+def planner_command_from_msg(msg: _PlannerCommandMsg) -> PlannerCommand:
     return PlannerCommand(_stamp(msg), float(msg.target_speed), msg.reason)
 
 
-def route_from_msg(msg: Any) -> Route:
+def route_from_msg(msg: _RouteMsg) -> Route:
     return Route(_xy(msg.points), float(msg.speed_limit))
 
 
 # --- bag readers -------------------------------------------------------------------------------
 
-def _read(path: str | Path, topic: str, convert) -> list:
+def _read[M, T](path: str | Path, topic: str, convert: Callable[[M], T]) -> list[T]:
+    """Decode ``topic``; the caller's ``convert`` names the message shape ``M`` it expects (unchecked here)."""
     with open(path, "rb") as fh:
         reader = make_reader(fh, decoder_factories=[DecoderFactory()])
-        return [convert(ros_msg) for _, _, _, ros_msg in reader.iter_decoded_messages(topics=[topic])]
+        return [convert(cast(M, m.decoded_message)) for m in reader.iter_decoded_messages(topics=[topic])]
 
 
 def read_world_models(path: str | Path) -> list[WorldModel]:
@@ -128,7 +211,7 @@ class ReplayResult:
         return "\n".join(lines)
 
 
-def replay(worlds: Iterable[WorldModel], commands: Iterable[PlannerCommand], route: Route, planner,
+def replay(worlds: Iterable[WorldModel], commands: Iterable[PlannerCommand], route: Route, planner: Planner,
            atol: float = 1e-6, stamp_tol: float = 1e-6) -> ReplayResult:
     """Run ``planner`` over the recorded WorldModels and compare with the logged commands.
 
@@ -157,7 +240,7 @@ def replay(worlds: Iterable[WorldModel], commands: Iterable[PlannerCommand], rou
     return result
 
 
-def replay_bag(path: str | Path, planner, route: Route | None = None, atol: float = 1e-6) -> ReplayResult:
+def replay_bag(path: str | Path, planner: Planner, route: Route | None = None, atol: float = 1e-6) -> ReplayResult:
     route = route or read_route(path)
     if route is None:
         raise ValueError("the bag has no /route topic; pass route=")

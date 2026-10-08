@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
+from av_core.protocols import Planner, Predictor
 from av_core.sweep import EpisodeRecord
 from av_sim_toy import scenario as sc
 from av_sim_toy.sampler import sample_scenario, split_of
@@ -36,7 +37,7 @@ def to_record(ep: Episode) -> EpisodeRecord:
 class ToyScenario:
     seed: int
 
-    def run(self, planner, predictor=None) -> EpisodeRecord:
+    def run(self, planner: Planner, predictor: Predictor | None = None) -> EpisodeRecord:
         return to_record(run_episode(sample_scenario(self.seed), planner, predictor=predictor))
 
 

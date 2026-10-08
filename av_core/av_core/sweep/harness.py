@@ -11,17 +11,21 @@ import math
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, fields
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Callable, Iterable
 
 import numpy as np
 
+from av_core.protocols import Planner, Predictor
 from av_core.sweep.metrics import EpisodeMetrics, compute_metrics
-from av_core.sweep.record import EpisodeRecord, Scenario
+from av_core.sweep.record import EpisodeRecord, ParamValue, Scenario
 from av_core.sweep.stats import bootstrap_mean, wilson_interval
 
 ScenarioFactory = Callable[[int], Scenario]
-PlannerFactory = Callable[[], Any]
-PredictorFactory = Callable[[], Any]
+PlannerFactory = Callable[[], Planner]
+PredictorFactory = Callable[[], Predictor]
+Row = tuple[EpisodeMetrics, dict[str, ParamValue]]
+Interval = tuple[float, float, float]  # (estimate, low, high)
+SummaryEntry = dict[str, int | Interval]  # counts (n, n_*) and intervals
 
 
 def run_episode_for_seed(seed: int, scenario_factory: ScenarioFactory, planner_factory: PlannerFactory,
@@ -30,14 +34,14 @@ def run_episode_for_seed(seed: int, scenario_factory: ScenarioFactory, planner_f
     return scenario_factory(seed).run(planner_factory(), predictor)
 
 
-def _metrics_row(args: tuple) -> tuple[EpisodeMetrics, dict[str, Any]]:
+def _metrics_row(args: tuple[int, ScenarioFactory, PlannerFactory, PredictorFactory | None]) -> Row:
     rec = run_episode_for_seed(*args)
     return compute_metrics(rec), rec.params
 
 
 def run_sweep(seeds: Iterable[int], scenario_factory: ScenarioFactory, planner_factory: PlannerFactory,
               predictor_factory: PredictorFactory | None = None, workers: int = 1
-              ) -> list[tuple[EpisodeMetrics, dict[str, Any]]]:
+              ) -> list[Row]:
     """One (metrics, scenario params) pair per seed, in seed order."""
     jobs = [(s, scenario_factory, planner_factory, predictor_factory) for s in seeds]
     if workers <= 1:
@@ -46,7 +50,7 @@ def run_sweep(seeds: Iterable[int], scenario_factory: ScenarioFactory, planner_f
         return list(pool.map(_metrics_row, jobs, chunksize=max(1, len(jobs) // (workers * 4))))
 
 
-def write_csv(rows: list[tuple[EpisodeMetrics, dict[str, Any]]], path: str | Path) -> Path:
+def write_csv(rows: list[Row], path: str | Path) -> Path:
     """One row per episode: metrics columns, then ``param_*`` columns, so later plots need no rerun."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,7 +65,7 @@ def write_csv(rows: list[tuple[EpisodeMetrics, dict[str, Any]]], path: str | Pat
     return path
 
 
-def _cell(v: Any) -> Any:
+def _cell(v: ParamValue | np.generic) -> str | int:
     if v is None:
         return ""
     if isinstance(v, (bool, np.bool_)):
@@ -70,7 +74,7 @@ def _cell(v: Any) -> Any:
         return repr(float(v))  # round-trips exactly; nan/inf spelled out
     if isinstance(v, np.integer):
         return int(v)
-    return v
+    return v if isinstance(v, (int, str)) else str(v)
 
 
 def read_csv(path: str | Path) -> list[dict[str, str]]:
@@ -78,7 +82,7 @@ def read_csv(path: str | Path) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
-def summarize(rows: list[tuple[EpisodeMetrics, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+def summarize(rows: list[Row]) -> dict[str, SummaryEntry]:
     """Summary per split ('pedestrian present' / 'pedestrian absent'); every entry is (estimate, low, high).
 
     Rates use Wilson 95% intervals and continuous metrics a 95% bootstrap interval of the mean over the
@@ -86,10 +90,10 @@ def summarize(rows: list[tuple[EpisodeMetrics, dict[str, Any]]]) -> dict[str, di
     conflict, so it is reported as a rate of finite TTCs plus the mean over those.
     """
     ms = [m for m, _ in rows]
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, SummaryEntry] = {}
     for name, group in (("pedestrian present", [m for m in ms if m.ped_present]),
                         ("pedestrian absent", [m for m in ms if not m.ped_present])):
-        s: dict[str, Any] = {"n": len(group)}
+        s: SummaryEntry = {"n": len(group)}
         if name.endswith("present"):
             s["collision_rate"] = wilson_interval(sum(bool(m.collision) for m in group), len(group))
             s["min_distance_m"] = bootstrap_mean([m.min_distance for m in group])
@@ -112,12 +116,12 @@ def summarize(rows: list[tuple[EpisodeMetrics, dict[str, Any]]]) -> dict[str, di
 _DEFINED_IN = {"min_ttc_s": "n_finite_ttc", "braking_onset_m": "n_braking_onset", "time_penalty_s": "n_time_penalty"}
 
 
-def format_summary(summary: dict[str, dict[str, Any]]) -> str:
+def format_summary(summary: dict[str, SummaryEntry]) -> str:
     lines: list[str] = []
     for name, s in summary.items():
         lines.append(f"{name} (n = {s['n']})")
         for k, v in s.items():
-            if k == "n" or k.startswith("n_"):
+            if isinstance(v, int):  # the counts: n and n_*
                 continue
             est, lo, hi = v
             fmt = "{:.1%}" if k.endswith("rate") else "{:.2f}"

@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 SENSOR_RANGE = 50.0  # m
 _EPS = 1e-9
@@ -22,7 +23,7 @@ def rect_corners(cx: float, cy: float, yaw: float, length: float, width: float) 
     return local @ np.array([[c, s], [-s, c]]) + np.array([cx, cy])
 
 
-def point_in_convex(poly: np.ndarray, p, strict: bool = False) -> bool:
+def point_in_convex(poly: np.ndarray, p: ArrayLike, strict: bool = False) -> bool:
     """Point-in-convex-polygon for a counter-clockwise polygon (boundary counts unless ``strict``)."""
     p = np.asarray(p, dtype=np.float64)
     e = np.roll(poly, -1, axis=0) - poly
@@ -53,14 +54,14 @@ def _crosses_interior(a: np.ndarray, b: np.ndarray, corners: np.ndarray) -> bool
     return True
 
 
-def is_visible(sensor, point, corners: np.ndarray, max_range: float = SENSOR_RANGE) -> bool:
+def is_visible(sensor: ArrayLike, point: ArrayLike, corners: np.ndarray, max_range: float = SENSOR_RANGE) -> bool:
     a, p = np.asarray(sensor, dtype=np.float64), np.asarray(point, dtype=np.float64)
     if math.hypot(*(p - a)) > max_range:
         return False
     return not _crosses_interior(a, p, corners)
 
 
-def shadow_polygon(sensor, corners: np.ndarray, max_range: float = SENSOR_RANGE) -> np.ndarray | None:
+def shadow_polygon(sensor: ArrayLike, corners: np.ndarray, max_range: float = SENSOR_RANGE) -> np.ndarray | None:
     """Shadow quad: the two corners at the extreme bearings, each extended along its bearing ray.
 
     The far edge is placed tangent to the range circle (rays run to ``max_range / cos(half_angle)``),
