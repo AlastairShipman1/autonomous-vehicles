@@ -30,8 +30,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "av-core", editable = "av_core" },
-    { name = "av-sim-toy", editable = "av_sim_toy" },
+    { name = "av-core", editable = "src/av_core" },
+    { name = "av-sim-toy", editable = "src/av_sim_toy" },
 ]
 
 [package.metadata.requires-dev]
@@ -47,7 +47,7 @@ dev = [
 [[package]]
 name = "av-core"
 version = "0.1.0"
-source = { editable = "av_core" }
+source = { editable = "src/av_core" }
 dependencies = [
     { name = "numpy" },
     { name = "scipy" },
@@ -62,7 +62,7 @@ requires-dist = [
 [[package]]
 name = "av-sim-toy"
 version = "0.1.0"
-source = { editable = "av_sim_toy" }
+source = { editable = "src/av_sim_toy" }
 dependencies = [
     { name = "av-core" },
     { name = "matplotlib" },
@@ -71,7 +71,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "av-core", editable = "av_core" },
+    { name = "av-core", editable = "src/av_core" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=1.26" },
 ]

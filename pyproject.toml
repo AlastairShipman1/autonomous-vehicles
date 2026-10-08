@@ -20,7 +20,8 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-members = ["av_core", "av_sim_toy"]
+# Explicit paths, not a glob: the colcon packages (av_interfaces, av_ros) will sit in src/ too and are not uv members.
+members = ["src/av_core", "src/av_sim_toy"]
 
 [tool.uv.sources]
 av-core = { workspace = true }
@@ -33,7 +34,7 @@ addopts = "-m 'not slow'"
 markers = ["slow: long-running tests, run with -m slow"]
 
 [tool.pyright]
-include = ["av_core", "av_sim_toy", "tools"]
+include = ["src", "tools"]
 exclude = ["**/.venv"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"

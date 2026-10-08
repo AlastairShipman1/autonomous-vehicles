@@ -17,20 +17,20 @@ Not here: PRs 1.5 to 1.9 (messages, harness, ROS nodes, Foxglove bridge, the CAR
 Python 3.12 to match the desktop, so `av_core` behaves identically on both; no ROS on the Mac.
 
 - Python 3.12 venv (uv or venv) at the repo root.
-- `pip install -e av_core av_sim_toy` plus `numpy scipy matplotlib pytest hypothesis mcap mcap-ros2-support`.
+- `pip install -e src/av_core src/av_sim_toy` plus `numpy scipy matplotlib pytest hypothesis mcap mcap-ros2-support`.
 - `brew install ffmpeg` for exporting toy-sim videos.
 - Foxglove desktop app, for viewing bags copied from the desktop (only needed for PR 2.8).
 
 Repo folders you'll touch from the laptop:
 
 ```text
-av_core/        pure Python, no ROS: types, control/, plan/, predict/, sweep/, geometry/
-av_sim_toy/     2D occlusion sim
-tools/          mcap_io, run scripts
-tests/          pytest, runs here and in CI
+src/av_core/        pure Python, no ROS: types, control/, plan/, predict/, sweep/, geometry/
+src/av_sim_toy/     2D occlusion sim
+tools/              mcap_io, run scripts
+tests/              pytest, runs here and in CI
 ```
 
-`av_interfaces/` and `av_ros/` also live in the repo but are desktop-only (colcon); leave them alone from the laptop.
+`src/av_interfaces/` and `src/av_ros/` also live in the repo but are desktop-only (colcon); leave them alone from the laptop.
 
 ## Shared contracts
 
