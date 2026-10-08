@@ -5,7 +5,7 @@ import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from av_core.geometry import is_visible, point_in_convex, rect_corners, shadow_polygon
+from av_core.geometry import SENSOR_RANGE, is_visible, point_in_convex, rect_corners, shadow_polygon
 
 SENSOR = (0.0, 0.0)
 BOX = rect_corners(50.0, 0.0, 0.0, 6.0, 2.0)  # x in [47, 53], y in [-1, 1]
@@ -99,7 +99,7 @@ unit = st.floats(0.0, 1.0)
 
 
 @settings(max_examples=300, deadline=None)
-@given(corners=occluders, theta=st.floats(-math.pi, math.pi), r=st.floats(0.5, 50.0))
+@given(corners=occluders, theta=st.floats(-math.pi, math.pi), r=st.floats(0.5, SENSOR_RANGE - 1e-6))  # stay off the range edge, like the 1e-6 margin below
 def test_property_shadow_hidden_and_rest_visible(corners, theta, r):
     assume(not point_in_convex(corners, SENSOR))
     q = shadow_polygon(SENSOR, corners)

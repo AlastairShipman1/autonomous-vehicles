@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -21,7 +22,7 @@ def wilson_interval(successes: int, n: int, z: float = Z95) -> tuple[float, floa
     return p, max(0.0, centre - half), min(1.0, centre + half)
 
 
-def bootstrap_mean(values, n_resamples: int = N_BOOTSTRAP, seed: int = 0, level: float = 0.95
+def bootstrap_mean(values: Sequence[float | None] | np.ndarray, n_resamples: int = N_BOOTSTRAP, seed: int = 0, level: float = 0.95
                    ) -> tuple[float, float, float]:
     """(mean, low, high) of the mean of the finite values; nan when there are none."""
     v = np.asarray(values, dtype=np.float64)

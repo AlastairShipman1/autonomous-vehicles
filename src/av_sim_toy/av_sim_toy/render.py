@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib
@@ -29,9 +30,18 @@ COLORS = dict(road="#d9d9d9", parking="#bdbdbd", walk="#eeeeee", ego="#1f77b4", 
               shadow="#f2a900", ped="#d62728", edge="#222222")
 
 
-def _frames(ep: Episode) -> dict[str, np.ndarray | list]:
+@dataclass(frozen=True)
+class _Frames:
+    t: np.ndarray
+    ego: np.ndarray
+    ped: np.ndarray
+    target: np.ndarray
+    reason: list[str]
+
+
+def _frames(ep: Episode) -> _Frames:
     """Per-frame arrays: the logged rows plus the final state, so the last frame shows the outcome."""
-    return dict(
+    return _Frames(
         t=np.append(ep.t, ep.t[-1] + ep.dt),
         ego=np.vstack([ep.ego, ep.final_ego]),
         ped=np.vstack([ep.ped, ep.final_ped]),
@@ -55,9 +65,11 @@ class _Scene:
         ax.add_patch(Rectangle((x0, Y_LIM[0]), x1 - x0, sc.SIDEWALK_Y - Y_LIM[0], fc=COLORS["walk"], lw=0))
         ax.axhline(0.0, color="white", ls=(0, (6, 6)), lw=1)
         ax.add_patch(Polygon(self.occluder, fc=COLORS["occluder"], ec=COLORS["edge"], zorder=4))
-        self.shadow = ax.add_patch(Polygon(np.zeros((3, 2)), fc=COLORS["shadow"], alpha=0.35, ec="none", zorder=3))
-        self.ego = ax.add_patch(Polygon(np.zeros((4, 2)), fc=COLORS["ego"], ec=COLORS["edge"], zorder=5))
-        self.ped = ax.add_patch(Circle((0, 0), sc.PED_RADIUS, zorder=6))
+        self.shadow = Polygon(np.zeros((3, 2)), fc=COLORS["shadow"], alpha=0.35, ec="none", zorder=3)
+        self.ego = Polygon(np.zeros((4, 2)), fc=COLORS["ego"], ec=COLORS["edge"], zorder=5)
+        self.ped = Circle((0, 0), sc.PED_RADIUS, zorder=6)
+        for patch in (self.shadow, self.ego, self.ped):
+            ax.add_patch(patch)
         self.text = ax.text(0.01, 0.97, "", transform=ax.transAxes, va="top", family="monospace", fontsize=10,
                             bbox=dict(fc="white", ec="none", alpha=0.8), zorder=10)
         ax.set_xlabel("x [m]")
@@ -66,7 +78,7 @@ class _Scene:
 
     def draw(self, k: int) -> None:
         f, ep = self.f, self.ep
-        x, y, yaw, v = f["ego"][k]
+        x, y, yaw, v = f.ego[k]
         cx, cy = x + 0.5 * sc.EGO_WHEELBASE * math.cos(yaw), y + 0.5 * sc.EGO_WHEELBASE * math.sin(yaw)
         self.ego.set_xy(rect_corners(cx, cy, yaw, sc.EGO_LENGTH, sc.EGO_WIDTH))
         front = np.array([x + 0.5 * (sc.EGO_LENGTH + sc.EGO_WHEELBASE) * math.cos(yaw),
@@ -75,22 +87,22 @@ class _Scene:
         self.shadow.set_visible(shadow is not None)
         if shadow is not None:
             self.shadow.set_xy(shadow)
-        pxy = f["ped"][k]
+        pxy = f.ped[k]
         self.ped.set_visible(not np.isnan(pxy[0]))
         if not np.isnan(pxy[0]):
             seen = is_visible(front, pxy, self.occluder, SENSOR_RANGE)
-            self.ped.center = tuple(pxy)
+            self.ped.center = (float(pxy[0]), float(pxy[1]))
             self.ped.set(fc=COLORS["ped"] if seen else "none", ec=COLORS["ped"], ls="-" if seen else "--", lw=1.5)
         self.ax.set_xlim(front[0] - VIEW_BEHIND, front[0] + VIEW_AHEAD)
-        last = k == len(f["t"]) - 1
-        label = f"t={f['t'][k]:5.2f}s  v={v:5.2f} m/s  target={f['target'][k]:5.2f} m/s ({f['reason'][k]})"
+        last = k == len(f.t) - 1
+        label = f"t={f.t[k]:5.2f}s  v={v:5.2f} m/s  target={f.target[k]:5.2f} m/s ({f.reason[k]})"
         self.text.set_text(label + (f"\noutcome: {ep.outcome}" if last else ""))
 
 
 def render_frame(ep: Episode, k: int = -1):
     """Draw one frame and return the matplotlib figure (caller closes it)."""
     scene = _Scene(ep)
-    scene.draw(k % len(scene.f["t"]))
+    scene.draw(k % len(scene.f.t))
     return scene.fig
 
 
@@ -101,9 +113,9 @@ def render_episode(ep: Episode, path: str | Path, fps: int | None = None, stride
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     scene = _Scene(ep)
-    idx = list(range(0, len(scene.f["t"]), stride))
-    if idx[-1] != len(scene.f["t"]) - 1:
-        idx.append(len(scene.f["t"]) - 1)  # always end on the outcome frame
+    idx = list(range(0, len(scene.f.t), stride))
+    if idx[-1] != len(scene.f.t) - 1:
+        idx.append(len(scene.f.t) - 1)  # always end on the outcome frame
     fps = fps or max(1, round(1.0 / (ep.dt * stride)))
     anim = FuncAnimation(scene.fig, lambda i: scene.draw(idx[i]), frames=len(idx), blit=False)
     anim.save(str(path), writer=FFMpegWriter(fps=fps, codec="libx264", extra_args=["-pix_fmt", "yuv420p"]))

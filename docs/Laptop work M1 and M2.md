@@ -17,20 +17,20 @@ Not here: PRs 1.5 to 1.9 (messages, harness, ROS nodes, Foxglove bridge, the CAR
 Python 3.12 to match the desktop, so `av_core` behaves identically on both; no ROS on the Mac.
 
 - Python 3.12 venv (uv or venv) at the repo root.
-- `pip install -e av_core av_sim_toy` plus `numpy scipy matplotlib pytest hypothesis mcap mcap-ros2-support`.
+- `pip install -e src/av_core src/av_sim_toy` plus `numpy scipy matplotlib pytest hypothesis mcap mcap-ros2-support`.
 - `brew install ffmpeg` for exporting toy-sim videos.
 - Foxglove desktop app, for viewing bags copied from the desktop (only needed for PR 2.8).
 
 Repo folders you'll touch from the laptop:
 
 ```text
-av_core/        pure Python, no ROS: types, control/, plan/, predict/, sweep/, geometry/
-av_sim_toy/     2D occlusion sim
-tools/          mcap_io, run scripts
-tests/          pytest, runs here and in CI
+src/av_core/        pure Python, no ROS: types, control/, plan/, predict/, sweep/, geometry/
+src/av_sim_toy/     2D occlusion sim
+tools/              mcap_io, run scripts
+tests/              pytest, runs here and in CI
 ```
 
-`av_interfaces/` and `av_ros/` also live in the repo but are desktop-only (colcon); leave them alone from the laptop.
+`src/av_interfaces/` and `src/av_ros/` also live in the repo but are desktop-only (colcon); leave them alone from the laptop.
 
 ## Shared contracts
 
@@ -42,10 +42,11 @@ EgoState(x, y, yaw, speed, length, width, wheelbase)
 Agent(id: int, cls: 'vehicle' | 'pedestrian' | 'cyclist',
       x, y, yaw, vx, vy, length, width, is_static: bool)
 OccludedRegion(occluder_id: int, polygon: (K, 2) array)       # filled by the toy sim in M2
+TrafficLight(id: int, state: 'red' | 'yellow' | 'green' | 'unknown',
+             stop_line: (2, 2) array)                          # the stop line's two endpoints
 WorldModel(stamp, ego: EgoState, agents: tuple[Agent, ...],
            occluded: tuple[OccludedRegion, ...],
-           light: 'none' | 'red' | 'yellow' | 'green',
-           stop_line: (2,) array | None)                       # stop line of the light affecting ego
+           traffic_lights: tuple[TrafficLight, ...])           # every known light; consumers decide which apply
 Route(points: (N, 2) array, speed_limit: float)                # densified to 0.5 m spacing
 PredictedTrajectory(agent_id, t: (H,) array, xy: (H, 2) array, prob: float = 1.0)
 PlannerCommand(stamp, target_speed, reason: str)               # reason: 'route' | 'lead' | 'light' | 'conflict' | 'occlusion'
@@ -117,7 +118,7 @@ v_{\text{lead}} = \sqrt{2\, b\, \max(0,\ s_{\text{lead}} - d_0)}, \qquad b = 3\ 
 
 - κ(s) is the route curvature from the resampled points; s₀ is ego's arc-length position (closest point).
 - s\_lead is the arc length to the nearest agent ahead whose lateral offset from the route is below half the ego width plus half its width plus 0.3 m.
-- v\_light uses the v\_lead formula with the stop line as the obstacle and d₀ = 2 m, when the light is red or yellow and ego can still stop at b. Otherwise it is infinite.
+- v\_light uses the v\_lead formula with the stop line as the obstacle and d₀ = 2 m, for each light that is not green (red, yellow or unknown) whose stop-line midpoint is within 2 m of the route and that ego can still stop at b. The nearest binds; with none it is infinite.
 
 Test it with hand-built WorldModels and Routes; no simulator is needed.
 

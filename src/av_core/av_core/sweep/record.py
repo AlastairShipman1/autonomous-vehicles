@@ -7,9 +7,16 @@ Any backend (the toy sim now, CARLA later) provides a scenario object with
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from av_core.protocols import Planner, Predictor
+
+Outcome = Literal["collision", "finished", "timeout"]
+# A scenario parameter as it lands in the CSV.
+ParamValue = float | int | str | bool | None
 
 
 @dataclass
@@ -27,8 +34,8 @@ class EpisodeRecord:
     ped_radius: float
     occluder_near_x: float  # x of the occluder's near end
     occluder_far_x: float
-    outcome: str  # 'collision' | 'finished' | 'timeout'
-    params: dict[str, Any] = field(default_factory=dict)  # scenario parameters, copied into the CSV
+    outcome: Outcome
+    params: dict[str, ParamValue] = field(default_factory=dict)  # scenario parameters, copied into the CSV
 
     @property
     def ped_present(self) -> bool:
@@ -36,4 +43,4 @@ class EpisodeRecord:
 
 
 class Scenario(Protocol):
-    def run(self, planner: Any, predictor: Any | None) -> EpisodeRecord: ...
+    def run(self, planner: Planner, predictor: Predictor | None) -> EpisodeRecord: ...

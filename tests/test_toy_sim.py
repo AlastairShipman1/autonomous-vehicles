@@ -7,7 +7,7 @@ import pytest
 from av_core.control import Controller
 from av_core.geometry import distance_point_to_rect, rect_corners
 from av_core.plan import RuleBasedPlanner
-from av_core.types import ControlCommand
+from av_core.types import ControlCommand, PlannerCommand, PlannerReason
 from av_sim_toy import ScenarioParams, ToySim, run_episode
 
 PLANNER = RuleBasedPlanner()
@@ -36,7 +36,7 @@ def test_initial_world_model():
     occluder = next(a for a in w.agents if a.is_static)
     assert (occluder.x, occluder.y, occluder.length, occluder.width) == (50.0, -2.75, 6.0, 2.0)
     assert len(w.occluded) == 1 and w.occluded[0].occluder_id == occluder.id
-    assert w.light == "none" and w.stop_line is None
+    assert w.traffic_lights == ()
 
 
 def test_pedestrian_only_in_world_while_visible():
@@ -78,8 +78,7 @@ def test_no_collision_when_pedestrian_clears_the_lane_late():
 def test_pedestrian_never_triggers_if_ego_stops_short():
     class Stopper:
         def plan(self, world, route, predictions=()):
-            from av_core.types import PlannerCommand
-            return PlannerCommand(world.stamp, 0.0, "route")
+            return PlannerCommand(world.stamp, 0.0, PlannerReason.ROUTE)
 
     p = ScenarioParams(initial_speed=8.0, ped_trigger_distance=5.0)
     ep = run_episode(p, Stopper())

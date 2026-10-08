@@ -12,13 +12,16 @@ dev = [
     "hypothesis>=6",
     "mcap>=1.2",
     "mcap-ros2-support>=0.5",
+    "pyright>=1.1.414",
+    "ruff>=0.16.10",
 ]
 
 [tool.uv]
 package = false
 
 [tool.uv.workspace]
-members = ["av_core", "av_sim_toy"]
+# Explicit paths, not a glob: the colcon packages (av_interfaces, av_ros) will sit in src/ too and are not uv members.
+members = ["src/av_core", "src/av_sim_toy"]
 
 [tool.uv.sources]
 av-core = { workspace = true }
@@ -29,3 +32,27 @@ testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-m 'not slow'"
 markers = ["slow: long-running tests, run with -m slow"]
+
+[tool.pyright]
+include = ["src", "tools"]
+exclude = ["**/.venv"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportMissingParameterType = "error"
+reportUnknownParameterType = "error"
+extraPaths = ["./src/av_core"]
+
+[tool.ruff.lint]
+# ANN401 bans explicit `Any`; ANN001/002/003 require annotations on parameters.
+select = ["ANN001", "ANN002", "ANN003", "ANN401", "PGH003", "TID251"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]  # fixtures and test helpers are left unannotated
+# Only the ROS and CARLA tiers may import ROS / CARLA; everything else must run on a bare laptop.
+"**/av_ros/**" = ["TID251"]
+"**/av_carla/**" = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"rclpy".msg = "ROS is desktop-only: import it from av_ros only."
+"rosbag2_py".msg = "ROS is desktop-only: import it from av_ros only."
+"carla".msg = "CARLA is desktop-only: import it from av_carla only."

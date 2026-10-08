@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from av_core.types import Route
 
 SPACING = 0.5  # m, the Route contract
 
 
-def densify(points, speed_limit: float, spacing: float = SPACING) -> Route:
+def densify(points: ArrayLike, speed_limit: float, spacing: float = SPACING) -> Route:
     """Resample a polyline at uniform arc-length spacing (the last point is kept)."""
     pts = np.asarray(points, dtype=np.float64)
     seg = np.hypot(*np.diff(pts, axis=0).T)

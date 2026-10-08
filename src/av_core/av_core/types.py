@@ -10,16 +10,39 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, fields
-from typing import Any
+from collections.abc import Mapping
+from enum import StrEnum
+from typing import SupportsFloat, cast
 
 import numpy as np
+from numpy.typing import ArrayLike
 
-AGENT_CLASSES = ("vehicle", "pedestrian", "cyclist")
-LIGHT_STATES = ("none", "red", "yellow", "green")
-PLANNER_REASONS = ("route", "lead", "light", "conflict", "occlusion")
+# What ``to_dict`` produces: plain data a JSON encoder accepts.
+type Json = None | bool | int | float | str | list[Json] | dict[str, Json]
+
+# The values are the lowercase strings used in dicts and ROS messages, so the wire format is plain text.
+class AgentClass(StrEnum):
+    VEHICLE = "vehicle"
+    PEDESTRIAN = "pedestrian"
+    CYCLIST = "cyclist"
 
 
-def _scalar(name: str, value: Any, *, lo: float = -math.inf, hi: float = math.inf,
+class TrafficLightState(StrEnum):
+    RED = "red"
+    YELLOW = "yellow"
+    GREEN = "green"
+    UNKNOWN = "unknown"  # the light exists (it is on the map) but its state is not observed
+
+
+class PlannerReason(StrEnum):
+    ROUTE = "route"
+    LEAD = "lead"
+    LIGHT = "light"
+    CONFLICT = "conflict"
+    OCCLUSION = "occlusion"
+
+
+def _scalar(name: str, value: SupportsFloat | str, *, lo: float = -math.inf, hi: float = math.inf,
             lo_open: bool = False) -> float:
     try:
         v = float(value)
@@ -32,7 +55,7 @@ def _scalar(name: str, value: Any, *, lo: float = -math.inf, hi: float = math.in
     return v
 
 
-def _array(name: str, value: Any, shape: tuple[int | None, ...]) -> np.ndarray:
+def _array(name: str, value: ArrayLike, shape: tuple[int | None, ...]) -> np.ndarray:
     a = np.array(value, dtype=np.float64)  # copies, so callers can't mutate our state
     ok = a.ndim == len(shape) and all(s is None or s == d for s, d in zip(shape, a.shape))
     if not ok:
@@ -43,13 +66,15 @@ def _array(name: str, value: Any, shape: tuple[int | None, ...]) -> np.ndarray:
     return a
 
 
-def _choice(name: str, value: Any, allowed: tuple[str, ...]) -> str:
-    if value not in allowed:
-        raise ValueError(f"{name} must be one of {allowed}, got {value!r}")
-    return value
+def _enum[E: StrEnum](name: str, value: str, kind: type[E]) -> E:
+    """``value`` as a member of ``kind``; accepts the member itself or its string value."""
+    try:
+        return kind(value)
+    except ValueError:
+        raise ValueError(f"{name} must be one of {[m.value for m in kind]}, got {value!r}") from None
 
 
-def _set(obj: Any, **kw: Any) -> None:
+def _set(obj: object, **kw: object) -> None:
     for k, v in kw.items():
         object.__setattr__(obj, k, v)
 
@@ -57,7 +82,7 @@ def _set(obj: Any, **kw: Any) -> None:
 class _Contract:
     """Equality and dict round-trip shared by all contract types."""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Json]:
         return {f.name: _to_plain(getattr(self, f.name)) for f in fields(self)}  # type: ignore[arg-type]
 
     def __eq__(self, other: object) -> bool:
@@ -68,14 +93,16 @@ class _Contract:
     __hash__ = None  # type: ignore[assignment]  # arrays are unhashable
 
 
-def _to_plain(v: Any) -> Any:
+def _to_plain(v: object) -> Json:
+    if isinstance(v, StrEnum):
+        return v.value
     if isinstance(v, _Contract):
         return v.to_dict()
     if isinstance(v, np.ndarray):
         return v.tolist()
     if isinstance(v, tuple):
-        return [_to_plain(x) for x in v]
-    return v
+        return [_to_plain(x) for x in cast(tuple[object, ...], v)]
+    return cast(Json, v)
 
 
 @dataclass(frozen=True, eq=False)
@@ -100,15 +127,26 @@ class EgoState(_Contract):
             wheelbase=_scalar("wheelbase", self.wheelbase, lo=0.0, lo_open=True),
         )
 
+    @property
+    def velocity(self) -> np.ndarray:
+        """(vx, vy) in the map frame, assuming the velocity points along ``yaw`` (no sideslip).
+
+        Exact for the kinematic bicycle model; an approximation once tyre slip matters. Keep that
+        assumption here so a better model changes one property. ``speed`` is validated >= 0 today
+        (no reversing); if reversing is added, ``speed`` becomes signed longitudinal velocity and this
+        property stays correct unchanged.
+        """
+        return self.speed * np.array([math.cos(self.yaw), math.sin(self.yaw)])
+
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> EgoState:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> EgoState:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
 class Agent(_Contract):
     id: int
-    cls: str
+    cls: AgentClass
     x: float
     y: float
     yaw: float
@@ -124,7 +162,7 @@ class Agent(_Contract):
         _set(
             self,
             id=int(self.id),
-            cls=_choice("cls", self.cls, AGENT_CLASSES),
+            cls=_enum("cls", self.cls, AgentClass),
             x=_scalar("x", self.x),
             y=_scalar("y", self.y),
             yaw=_scalar("yaw", self.yaw),
@@ -135,9 +173,14 @@ class Agent(_Contract):
             is_static=bool(self.is_static),
         )
 
+    @property
+    def velocity(self) -> np.ndarray:
+        """(vx, vy) in the map frame. Independent of ``yaw``: a tracked object need not move the way it faces."""
+        return np.array([self.vx, self.vy])
+
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Agent:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> Agent:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -152,8 +195,33 @@ class OccludedRegion(_Contract):
         _set(self, occluder_id=int(self.occluder_id), polygon=poly)
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> OccludedRegion:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> OccludedRegion:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
+
+
+@dataclass(frozen=True, eq=False)
+class TrafficLight(_Contract):
+    """One signal: its id (from the map), current state, and the stop line it controls.
+
+    ``stop_line`` is the segment's two endpoints. Whether a light applies to ego is the consumer's call
+    (planner v0 checks the stop line against the route); the producer reports every light it knows about.
+    """
+
+    id: int
+    state: TrafficLightState
+    stop_line: np.ndarray  # (2, 2): endpoints of the stop line
+
+    def __post_init__(self) -> None:
+        if isinstance(self.id, bool) or not isinstance(self.id, (int, np.integer)):
+            raise ValueError(f"id must be an int, got {self.id!r}")
+        line = _array("stop_line", self.stop_line, (2, 2))
+        if np.array_equal(line[0], line[1]):
+            raise ValueError("stop_line endpoints must differ")
+        _set(self, id=int(self.id), state=_enum("state", self.state, TrafficLightState), stop_line=line)
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, object]) -> TrafficLight:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -162,39 +230,42 @@ class WorldModel(_Contract):
     ego: EgoState
     agents: tuple[Agent, ...]
     occluded: tuple[OccludedRegion, ...]
-    light: str
-    stop_line: np.ndarray | None  # (2,): stop line of the light affecting ego
+    traffic_lights: tuple[TrafficLight, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.ego, EgoState):
             raise ValueError("ego must be an EgoState")
         agents, occluded = tuple(self.agents), tuple(self.occluded)
+        lights = tuple(self.traffic_lights)
         if not all(isinstance(a, Agent) for a in agents):
             raise ValueError("agents must all be Agent")
         if not all(isinstance(o, OccludedRegion) for o in occluded):
             raise ValueError("occluded must all be OccludedRegion")
+        if not all(isinstance(t, TrafficLight) for t in lights):
+            raise ValueError("traffic_lights must all be TrafficLight")
         ids = [a.id for a in agents]
         if len(set(ids)) != len(ids):
             raise ValueError("agent ids must be unique")
-        stop = None if self.stop_line is None else _array("stop_line", self.stop_line, (2,))
+        light_ids = [t.id for t in lights]
+        if len(set(light_ids)) != len(light_ids):
+            raise ValueError("traffic light ids must be unique")
         _set(
             self,
             stamp=_scalar("stamp", self.stamp),
             agents=agents,
             occluded=occluded,
-            light=_choice("light", self.light, LIGHT_STATES),
-            stop_line=stop,
+            traffic_lights=lights,
         )
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> WorldModel:
+    def from_dict(cls, d: Mapping[str, object]) -> WorldModel:
         return cls(
-            stamp=d["stamp"],
-            ego=EgoState.from_dict(d["ego"]),
-            agents=tuple(Agent.from_dict(a) for a in d["agents"]),
-            occluded=tuple(OccludedRegion.from_dict(o) for o in d["occluded"]),
-            light=d["light"],
-            stop_line=d["stop_line"],
+            stamp=cast(float, d["stamp"]),
+            ego=EgoState.from_dict(cast(Mapping[str, object], d["ego"])),
+            agents=tuple(Agent.from_dict(a) for a in cast(list[Mapping[str, object]], d["agents"])),
+            occluded=tuple(OccludedRegion.from_dict(o) for o in cast(list[Mapping[str, object]], d["occluded"])),
+            traffic_lights=tuple(
+                TrafficLight.from_dict(t) for t in cast(list[Mapping[str, object]], d["traffic_lights"])),
         )
 
 
@@ -210,8 +281,8 @@ class Route(_Contract):
         _set(self, points=pts, speed_limit=_scalar("speed_limit", self.speed_limit, lo=0.0, lo_open=True))
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> Route:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> Route:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -231,27 +302,27 @@ class PredictedTrajectory(_Contract):
         _set(self, agent_id=int(self.agent_id), t=t, xy=xy, prob=_scalar("prob", self.prob, lo=0.0, hi=1.0))
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> PredictedTrajectory:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> PredictedTrajectory:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
 class PlannerCommand(_Contract):
     stamp: float
     target_speed: float
-    reason: str
+    reason: PlannerReason
 
     def __post_init__(self) -> None:
         _set(
             self,
             stamp=_scalar("stamp", self.stamp),
             target_speed=_scalar("target_speed", self.target_speed, lo=0.0),
-            reason=_choice("reason", self.reason, PLANNER_REASONS),
+            reason=_enum("reason", self.reason, PlannerReason),
         )
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> PlannerCommand:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> PlannerCommand:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__
 
 
 @dataclass(frozen=True, eq=False)
@@ -271,5 +342,5 @@ class ControlCommand(_Contract):
         )
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> ControlCommand:
-        return cls(**d)
+    def from_dict(cls, d: Mapping[str, object]) -> ControlCommand:
+        return cls(**d)  # pyright: ignore[reportArgumentType]  # validated in __post_init__

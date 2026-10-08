@@ -9,6 +9,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 
+from av_core.types import EgoState
+
 
 # Stand-in for CARLA's dynamics: a = ACCEL_GAIN * throttle - BRAKE_GAIN * brake  [m/s^2]
 ACCEL_GAIN = 4.0
@@ -51,7 +53,7 @@ def _wrap(a: float) -> float:
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
-def with_state(ego, state: BicycleState):
+def with_state(ego: EgoState, state: BicycleState) -> EgoState:
     """Copy an ``EgoState`` with the kinematic fields replaced."""
     return replace(ego, x=state.x, y=state.y, yaw=state.yaw, speed=state.speed)
 

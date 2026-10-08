@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from av_core.geometry import RouteFrame
-from av_core.types import PlannerCommand, PredictedTrajectory, Route, WorldModel
+from av_core.types import PlannerCommand, PlannerReason, PredictedTrajectory, Route, TrafficLightState, WorldModel
 
 
 def stopping_speed(gap: float, decel: float, standoff: float) -> float:
@@ -27,7 +27,8 @@ class RuleBasedPlanner:
     lead_standoff: float = 6.0  # m
     light_standoff: float = 2.0  # m
     lane_margin: float = 0.3  # m, added to the half-widths for the "in my path" test
-    _frame_cache: tuple | None = field(default=None, init=False, repr=False, compare=False)
+    light_lateral_tol: float = 2.0  # m, a stop line whose midpoint is this close to the route applies to ego
+    _frame_cache: tuple[Route, RouteFrame] | None = field(default=None, init=False, repr=False, compare=False)
 
     def frame_for(self, route: Route) -> RouteFrame:
         """RouteFrame for ``route``, reused while the same Route object is passed in (one per episode)."""
@@ -40,20 +41,20 @@ class RuleBasedPlanner:
         """``predictions`` is ignored here; it keeps the signature shared with planner v1."""
         frame = self.frame_for(route)
         limits = self.limits(world, route, frame, predictions)
-        reason = min(limits, key=limits.get)  # dict order breaks ties: safety limits first
+        reason = min(limits, key=limits.__getitem__)  # dict order breaks ties: safety limits first
         return PlannerCommand(world.stamp, limits[reason], reason)
 
     def limits(self, world: WorldModel, route: Route, frame: RouteFrame | None = None,
-               predictions: tuple[PredictedTrajectory, ...] = ()) -> dict[str, float]:
+               predictions: tuple[PredictedTrajectory, ...] = ()) -> dict[PlannerReason, float]:
         frame = frame or self.frame_for(route)
         ego = world.ego
         s0, _ = frame.project(ego.x, ego.y)
         # Gaps are measured from the front bumper, which is (length + wheelbase) / 2 ahead of the rear axle.
         s_front = s0 + 0.5 * (ego.length + ego.wheelbase)
         return {
-            "lead": self._lead_limit(world, frame, s_front),
-            "light": self._light_limit(world, frame, s_front, ego.speed),
-            "route": self._route_limit(route, frame, s0),
+            PlannerReason.LEAD: self._lead_limit(world, frame, s_front),
+            PlannerReason.LIGHT: self._light_limit(world, frame, s_front, ego.speed),
+            PlannerReason.ROUTE: self._route_limit(route, frame, s0),
         }
 
     def _route_limit(self, route: Route, frame: RouteFrame, s0: float) -> float:
@@ -75,9 +76,15 @@ class RuleBasedPlanner:
         return stopping_speed(gap, self.b, self.lead_standoff) if math.isfinite(gap) else math.inf
 
     def _light_limit(self, world: WorldModel, frame: RouteFrame, s_front: float, speed: float) -> float:
-        if world.light not in ("red", "yellow") or world.stop_line is None:
-            return math.inf
-        gap = frame.project(*world.stop_line)[0] - s_front
-        if gap < 0.0 or speed**2 / (2.0 * self.b) > gap:  # already past it, or can no longer stop at b
-            return math.inf
-        return stopping_speed(gap, self.b, self.light_standoff)
+        limit = math.inf
+        for light in world.traffic_lights:
+            if light.state is TrafficLightState.GREEN:  # red, yellow and unknown all call for a stop
+                continue
+            s_stop, lateral = frame.project(*light.stop_line.mean(axis=0))
+            if abs(lateral) > self.light_lateral_tol:  # controls another lane or street
+                continue
+            gap = s_stop - s_front
+            if gap < 0.0 or speed**2 / (2.0 * self.b) > gap:  # already past it, or can no longer stop at b
+                continue
+            limit = min(limit, stopping_speed(gap, self.b, self.light_standoff))
+        return limit

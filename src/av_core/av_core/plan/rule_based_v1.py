@@ -13,7 +13,7 @@ import numpy as np
 
 from av_core.geometry import RouteFrame, distance_points_to_convex
 from av_core.plan.rule_based import RuleBasedPlanner, stopping_speed
-from av_core.types import PredictedTrajectory, Route, WorldModel
+from av_core.types import PlannerReason, PredictedTrajectory, Route, WorldModel
 
 
 @dataclass
@@ -25,7 +25,7 @@ class RuleBasedPlannerV1(RuleBasedPlanner):
     b_occ: float = 4.0  # m/s^2
 
     def limits(self, world: WorldModel, route: Route, frame: RouteFrame | None = None,
-               predictions: tuple[PredictedTrajectory, ...] = ()) -> dict[str, float]:
+               predictions: tuple[PredictedTrajectory, ...] = ()) -> dict[PlannerReason, float]:
         frame = frame or self.frame_for(route)
         base = super().limits(world, route, frame, predictions)
         ego = world.ego
@@ -33,11 +33,11 @@ class RuleBasedPlannerV1(RuleBasedPlanner):
         s_front = s0 + 0.5 * (ego.length + ego.wheelbase)
         # key order is the tie-break order: safety limits before the route limit
         return {
-            "lead": base["lead"],
-            "light": base["light"],
-            "conflict": self._conflict_limit(world, frame, s_front, predictions),
-            "occlusion": self._occlusion_limit(world, frame, s0),
-            "route": base["route"],
+            PlannerReason.LEAD: base[PlannerReason.LEAD],
+            PlannerReason.LIGHT: base[PlannerReason.LIGHT],
+            PlannerReason.CONFLICT: self._conflict_limit(world, frame, s_front, predictions),
+            PlannerReason.OCCLUSION: self._occlusion_limit(world, frame, s0),
+            PlannerReason.ROUTE: base[PlannerReason.ROUTE],
         }
 
     def _conflict_limit(self, world: WorldModel, frame: RouteFrame, s_front: float,
