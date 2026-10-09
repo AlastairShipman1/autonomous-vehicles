@@ -43,6 +43,17 @@ class RouteFrame:
         s, lateral = self.project_many(np.array([[x, y]]))
         return float(s[0]), float(lateral[0])
 
+    def pose_at(self, s: float, lateral: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+        """World xy at arc length ``s`` and signed lateral offset (left positive), and the unit tangent there.
+
+        ``s`` is clamped to the route; the tangent is that of the segment containing it.
+        """
+        s = float(np.clip(s, 0.0, self.s[-1]))
+        i = int(min(np.searchsorted(self.s, s, side="right") - 1, len(self._seg) - 1))
+        tangent = self._seg[i] / self._seg_len[i]
+        base = self.points[i] + (s - self.s[i]) * tangent
+        return base + lateral * np.array([-tangent[1], tangent[0]]), tangent
+
     def project_many(self, pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Vectorised ``project`` for (M, 2) points: arrays of arc length and signed lateral offset."""
         pts = np.asarray(pts, dtype=np.float64).reshape(-1, 2)

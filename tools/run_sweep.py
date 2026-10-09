@@ -9,6 +9,13 @@ first n of the chosen set.
 
 from __future__ import annotations
 
+import os
+
+# One BLAS thread per process: with --workers N the default (a thread per core in every worker) oversubscribes
+# the CPU and makes the matrix-heavy AIF planner an order of magnitude slower. Must precede the numpy import.
+for _var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
 import argparse
 import time
 from pathlib import Path

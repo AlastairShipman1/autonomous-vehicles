@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from av_core.plan import RuleBasedPlanner, RuleBasedPlannerV1
+from av_core.plan import AIFPlanner, RuleBasedPlanner, RuleBasedPlannerV1
 from av_core.predict import ConstantVelocityPredictor
 from av_core.protocols import Planner, Predictor
 
-PLANNERS = {"v0": RuleBasedPlanner, "v1": RuleBasedPlannerV1}
+PLANNERS = {"v0": RuleBasedPlanner, "v1": RuleBasedPlannerV1, "aif": AIFPlanner}
 
 # Planners that consume predictions get this predictor; others get none.
 PREDICTORS = {"v1": ConstantVelocityPredictor}
