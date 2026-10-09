@@ -25,7 +25,7 @@ from av_sim_toy import scenario as sc  # noqa: E402
 from av_sim_toy.sim import Episode  # noqa: E402
 
 VIEW_BEHIND, VIEW_AHEAD = 15.0, 75.0  # m of road shown behind / ahead of the ego front
-Y_LIM = (-9.0, 5.0)
+Y_LIM = (-8.0, 8.0)
 COLORS = dict(road="#d9d9d9", parking="#bdbdbd", walk="#eeeeee", ego="#1f77b4", occluder="#555555",
               shadow="#f2a900", ped="#d62728", edge="#222222")
 
@@ -51,30 +51,34 @@ def _frames(ep: Episode) -> _Frames:
 
 
 class _Scene:
-    def __init__(self, ep: Episode):
+    def __init__(self, ep: Episode, title: str = ""):
         self.ep, self.f = ep, _frames(ep)
         p = ep.params
-        self.occluder = rect_corners(p.occluder_x, sc.PARKING_CENTER_Y, 0.0, p.occluder_length, sc.OCCLUDER_WIDTH)
+        self.rects = [rect_corners(v.x, v.y, 0.0, v.length, v.width) for v in p.vehicles]
         self.fig, self.ax = plt.subplots(figsize=(12, 4.2), dpi=100)
         ax = self.ax
         ax.set_aspect("equal")
         ax.set_ylim(*Y_LIM)
         x0, x1 = -30.0, 300.0
         ax.add_patch(Rectangle((x0, -sc.LANE_WIDTH / 2), x1 - x0, sc.LANE_WIDTH, fc=COLORS["road"], lw=0))
-        ax.add_patch(Rectangle((x0, sc.SIDEWALK_Y), x1 - x0, -sc.LANE_WIDTH / 2 - sc.SIDEWALK_Y, fc=COLORS["parking"], lw=0))
-        ax.add_patch(Rectangle((x0, Y_LIM[0]), x1 - x0, sc.SIDEWALK_Y - Y_LIM[0], fc=COLORS["walk"], lw=0))
+        for sign in (-1.0, 1.0):  # parking lane and sidewalk on each side
+            ax.add_patch(Rectangle((x0, sign * sc.LANE_WIDTH / 2), x1 - x0, sign * (abs(sc.SIDEWALK_Y) - sc.LANE_WIDTH / 2),
+                                   fc=COLORS["parking"], lw=0))
+            ax.add_patch(Rectangle((x0, sign * abs(sc.SIDEWALK_Y)), x1 - x0, sign * (abs(Y_LIM[0]) - abs(sc.SIDEWALK_Y)),
+                                   fc=COLORS["walk"], lw=0))
         ax.axhline(0.0, color="white", ls=(0, (6, 6)), lw=1)
-        ax.add_patch(Polygon(self.occluder, fc=COLORS["occluder"], ec=COLORS["edge"], zorder=4))
-        self.shadow = Polygon(np.zeros((3, 2)), fc=COLORS["shadow"], alpha=0.35, ec="none", zorder=3)
+        for rect in self.rects:
+            ax.add_patch(Polygon(rect, fc=COLORS["occluder"], ec=COLORS["edge"], zorder=4))
+        self.shadows = [Polygon(np.zeros((3, 2)), fc=COLORS["shadow"], alpha=0.3, ec="none", zorder=3) for _ in self.rects]
         self.ego = Polygon(np.zeros((4, 2)), fc=COLORS["ego"], ec=COLORS["edge"], zorder=5)
         self.ped = Circle((0, 0), sc.PED_RADIUS, zorder=6)
-        for patch in (self.shadow, self.ego, self.ped):
+        for patch in (*self.shadows, self.ego, self.ped):
             ax.add_patch(patch)
         self.text = ax.text(0.01, 0.97, "", transform=ax.transAxes, va="top", family="monospace", fontsize=10,
                             bbox=dict(fc="white", ec="none", alpha=0.8), zorder=10)
         ax.set_xlabel("x [m]")
         ax.set_ylabel("y [m]")
-        ax.set_title(f"seed {p.seed}" if p.seed is not None else "episode")
+        ax.set_title(title or (f"seed {p.seed}" if p.seed is not None else "episode"))
 
     def draw(self, k: int) -> None:
         f, ep = self.f, self.ep
@@ -83,14 +87,15 @@ class _Scene:
         self.ego.set_xy(rect_corners(cx, cy, yaw, sc.EGO_LENGTH, sc.EGO_WIDTH))
         front = np.array([x + 0.5 * (sc.EGO_LENGTH + sc.EGO_WHEELBASE) * math.cos(yaw),
                           y + 0.5 * (sc.EGO_LENGTH + sc.EGO_WHEELBASE) * math.sin(yaw)])
-        shadow = shadow_polygon(front, self.occluder, SENSOR_RANGE)
-        self.shadow.set_visible(shadow is not None)
-        if shadow is not None:
-            self.shadow.set_xy(shadow)
+        for patch, rect in zip(self.shadows, self.rects):
+            shadow = shadow_polygon(front, rect, SENSOR_RANGE)
+            patch.set_visible(shadow is not None)
+            if shadow is not None:
+                patch.set_xy(shadow)
         pxy = f.ped[k]
         self.ped.set_visible(not np.isnan(pxy[0]))
         if not np.isnan(pxy[0]):
-            seen = is_visible(front, pxy, self.occluder, SENSOR_RANGE)
+            seen = all(is_visible(front, pxy, rect, SENSOR_RANGE) for rect in self.rects)
             self.ped.center = (float(pxy[0]), float(pxy[1]))
             self.ped.set(fc=COLORS["ped"] if seen else "none", ec=COLORS["ped"], ls="-" if seen else "--", lw=1.5)
         self.ax.set_xlim(front[0] - VIEW_BEHIND, front[0] + VIEW_AHEAD)
@@ -99,20 +104,20 @@ class _Scene:
         self.text.set_text(label + (f"\noutcome: {ep.outcome}" if last else ""))
 
 
-def render_frame(ep: Episode, k: int = -1):
+def render_frame(ep: Episode, k: int = -1, title: str = ""):
     """Draw one frame and return the matplotlib figure (caller closes it)."""
-    scene = _Scene(ep)
+    scene = _Scene(ep, title)
     scene.draw(k % len(scene.f.t))
     return scene.fig
 
 
-def render_episode(ep: Episode, path: str | Path, fps: int | None = None, stride: int = 1) -> Path:
+def render_episode(ep: Episode, path: str | Path, fps: int | None = None, stride: int = 1, title: str = "") -> Path:
     """Write an MP4. ``stride`` keeps every n-th step (faster to render); real time at stride 1."""
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg not found (brew install ffmpeg)")
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    scene = _Scene(ep)
+    scene = _Scene(ep, title)
     idx = list(range(0, len(scene.f.t), stride))
     if idx[-1] != len(scene.f.t) - 1:
         idx.append(len(scene.f.t) - 1)  # always end on the outcome frame
