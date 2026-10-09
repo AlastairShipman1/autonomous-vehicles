@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Laptop-side autonomous driving stack: av_core, toy occlusion sim, tooling"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["av-core", "av-sim-toy"]
+dependencies = ["av-core[aif]", "av-sim-toy"]
 
 [dependency-groups]
 dev = [
