@@ -75,4 +75,7 @@ with one. The model is tuned on 34 pedestrian episodes, so the table above is a 
   (visible in `tools.aif_trace 2`). A held action or a switching cost in the policy prior would help.
 - **No information-seeking beyond slowing.** The only visible bands are level with and past the crossing point, so the
   epistemic value is concentrated at the zone; there is no lateral movement to look around the car.
+- **One hazard at a time.** The nearest occluder beside the route is the hazard; vehicles in the ego's own lane are not
+  (the lead limit handles them) but, like every other occluder, they block line of sight in the visibility profile. A
+  row of parked cars is handled one car at a time, with the belief reset at each (`tests/test_obstructions.py`).
 - **Predictions unused.** `predictions` is ignored; in M4 the predictor feeds the transition model for visible agents.

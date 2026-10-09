@@ -21,6 +21,7 @@ GAP_PAST_FAR_END = 1.0  # m, where a hidden pedestrian is assumed to wait, along
 OUTSIDE_OFFSET = 0.75  # m beyond the occluder's outer side
 NEAR_HAZARD = 15.0  # m along the route: pedestrians farther than this from the crossing point are not ours
 CROSSING_SPEED = 0.3  # m/s toward the route that makes a pedestrian "crossing"
+IN_LANE_MARGIN = 0.3  # m, as the rule-based lead test
 IN_LANE = 1.75  # m from the route centreline: inside the lane counts as crossing
 
 
@@ -32,37 +33,48 @@ class Hazard:
     crossing_s: float  # arc length of the hypothesised pedestrian position (the crossing point)
     ped_xy: NDArray[np.float64]  # world position of a pedestrian waiting there
     corners: NDArray[np.float64]  # occluder rectangle
+    others: tuple[NDArray[np.float64], ...] = ()  # rectangles of every other occluder: they block sight too
 
 
 def find_hazard(world: WorldModel, frame: RouteFrame, s_front: float) -> Hazard | None:
-    """The nearest occluder ahead of the ego that has an occluded region, or ``None``."""
+    """The nearest occluder beside the route and ahead of the ego that has an occluded region, or ``None``.
+
+    A vehicle in the ego's own lane is not a hazard here (the lead-vehicle limit deals with it), but it still
+    blocks sight, so like every other occluder it is kept in ``Hazard.others``.
+    """
     by_id = {a.id: a for a in world.agents}
+    rects = {r.occluder_id: rect_corners(a.x, a.y, a.yaw, a.length, a.width)
+             for r in world.occluded if (a := by_id.get(r.occluder_id)) is not None}
     best: Hazard | None = None
     for region in world.occluded:
         a = by_id.get(region.occluder_id)
         if a is None:
             continue
         s_c, lat_c = frame.project(a.x, a.y)
+        if abs(lat_c) < 0.5 * (world.ego.width + a.width) + IN_LANE_MARGIN:  # in the ego's path
+            continue
         crossing_s = s_c + 0.5 * a.length + GAP_PAST_FAR_END
         if crossing_s < s_front - 2.0:  # already well past it
             continue
         side = -1.0 if lat_c < 0 else 1.0
         xy, _ = frame.pose_at(crossing_s, lat_c + side * (0.5 * a.width + OUTSIDE_OFFSET))
-        corners = rect_corners(a.x, a.y, a.yaw, a.length, a.width)
+        others = tuple(c for i, c in rects.items() if i != a.id)
         if best is None or crossing_s < best.crossing_s:
-            best = Hazard(a, crossing_s, xy, corners)
+            best = Hazard(a, crossing_s, xy, rects[a.id], others)
     return best
 
 
 def visibility_profile(hazard: Hazard, frame: RouteFrame) -> NDArray[np.float64]:
     """1 where a pedestrian waiting at the crossing point is in line of sight from each distance band, else 0.
 
-    The sensor is the ego's front-centre, ``d`` metres before the crossing point on the route centreline.
+    The sensor is the ego's front-centre, ``d`` metres before the crossing point on the route centreline. Every
+    occluder in the WorldModel can block the line of sight, not only the one the crossing point is measured from.
     """
     vis = np.zeros(ND)
     for i, d in enumerate(DIST_CENTRES):
         sensor, _ = frame.pose_at(hazard.crossing_s - d, 0.0)
-        vis[i] = float(is_visible(sensor, hazard.ped_xy, hazard.corners, SENSOR_RANGE))
+        vis[i] = float(all(is_visible(sensor, hazard.ped_xy, c, SENSOR_RANGE)
+                           for c in (hazard.corners, *hazard.others)))
     return vis
 
 
