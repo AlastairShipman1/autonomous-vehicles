@@ -49,6 +49,11 @@ def collision(rec: EpisodeRecord) -> bool | None:
     return bool(np.nanmin(pedestrian_distances(rec)) <= rec.ped_radius)
 
 
+def vehicle_collision(rec: EpisodeRecord) -> bool:
+    """Whether the ego ran into another vehicle, parked or moving. Defined for every episode."""
+    return rec.hit_vehicle
+
+
 def min_distance(rec: EpisodeRecord) -> float | None:
     """Smallest distance from any pedestrian's centre to the ego rectangle over the episode."""
     return float(np.nanmin(pedestrian_distances(rec))) if rec.ped_present else None
@@ -135,6 +140,7 @@ class EpisodeMetrics:
     braking_onset: float
     needless_stop: bool | None
     time_penalty: float
+    vehicle_collision: bool = False
 
 
 def compute_metrics(rec: EpisodeRecord) -> EpisodeMetrics:
@@ -142,5 +148,5 @@ def compute_metrics(rec: EpisodeRecord) -> EpisodeMetrics:
         seed=rec.seed, ped_present=rec.ped_present, outcome=rec.outcome,
         duration=float(rec.t[-1] - rec.t[0]), collision=collision(rec), min_distance=min_distance(rec),
         min_ttc=min_ttc(rec), braking_onset=braking_onset(rec), needless_stop=needless_stop(rec),
-        time_penalty=time_penalty(rec),
+        time_penalty=time_penalty(rec), vehicle_collision=vehicle_collision(rec),
     )

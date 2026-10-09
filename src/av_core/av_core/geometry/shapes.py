@@ -31,3 +31,19 @@ def distance_points_to_convex(poly: np.ndarray, pts: np.ndarray) -> np.ndarray:
     cross = ab[None, :, 0] * ap[..., 1] - ab[None, :, 1] * ap[..., 0]
     inside = np.all(cross >= 0, axis=1)
     return np.where(inside, 0.0, edge_dist)
+
+
+def convex_polygons_overlap(a: np.ndarray, b: np.ndarray, touching: bool = True) -> bool:
+    """Whether two convex polygons (K, 2) overlap, by the separating-axis test.
+
+    Touching (a shared edge or corner) counts as overlap unless ``touching`` is False.
+    """
+    for poly in (a, b):
+        edges = np.roll(poly, -1, axis=0) - poly
+        for ex, ey in edges:
+            axis = np.array([-ey, ex])
+            pa, pb = a @ axis, b @ axis
+            gap = max(pa.min() - pb.max(), pb.min() - pa.max())
+            if gap > 0 or (gap == 0 and not touching):
+                return False
+    return True

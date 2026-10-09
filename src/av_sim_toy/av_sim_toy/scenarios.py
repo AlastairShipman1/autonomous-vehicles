@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from av_sim_toy.scenario import Pedestrian, ScenarioParams, Vehicle
+from av_sim_toy.scenario import MovingVehicle, Pedestrian, ScenarioParams, Vehicle
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,35 @@ _LIST: list[NamedScenario] = [
         ScenarioParams(initial_speed=11.0, occluder_x=42.0, occluder_length=4.5, extra_vehicles=(Vehicle(49.5), Vehicle(57.0)),
                        ped_x=45.75, ped_trigger_distance=29.0,
                        extra_pedestrians=(Pedestrian(53.25, speed=1.4, trigger_distance=28.0),))),
+    NamedScenario(
+        "slow_lead_car", "A car ahead in the ego's lane doing 7 m/s (the ego wants 11); a hazard further on.",
+        ScenarioParams(initial_speed=11.0, occluder_x=75.0, ped_x=79.0, ped_trigger_distance=28.0,
+                       moving_vehicles=(MovingVehicle(x=25.0, speed=7.0),))),
+    NamedScenario(
+        "lead_brakes_hard", "The lead car, running at the ego's speed, brakes at 5 m/s² after 1.5 s down to 3 m/s. Nobody else about.",
+        ScenarioParams(initial_speed=11.0, occluder_x=75.0, ped_present=False,
+                       moving_vehicles=(MovingVehicle(x=32.0, speed=11.0, brake_time=1.5, brake_decel=5.0, brake_to=3.0),))),
+    NamedScenario(
+        "follow_the_leader", "The ego follows a car doing 10 m/s past the gap; the leader holds the ego back.",
+        ScenarioParams(initial_speed=11.0, occluder_x=46.0, occluder_length=4.5, extra_vehicles=(Vehicle(53.0),),
+                       ped_x=49.5, ped_trigger_distance=29.0,
+                       moving_vehicles=(MovingVehicle(x=22.0, speed=10.0),))),
+    NamedScenario(
+        "truck_ahead_hides_view", "A 10 m truck 12 m ahead in the lane, doing 10 m/s, blocks the ego's view of the roadside; "
+        "the pedestrian steps out past the parked car.",
+        ScenarioParams(initial_speed=11.0, ped_x=54.0, ped_trigger_distance=28.0,
+                       moving_vehicles=(MovingVehicle(x=17.0, speed=10.0, length=10.0, width=2.5),))),
+    NamedScenario(
+        "oncoming_traffic", "A car and a van come the other way in the opposite lane and are gone before the pedestrian steps "
+        "out from behind the parked car (the sim does not model them meeting). Planners should ignore them.",
+        ScenarioParams(initial_speed=11.0, ped_x=54.0, ped_trigger_distance=28.0,
+                       moving_vehicles=(MovingVehicle(x=85.0, speed=-10.0, y=3.5),
+                                        MovingVehicle(x=100.0, speed=-9.0, y=3.5, length=6.0, width=2.2)))),
+    NamedScenario(
+        "oncoming_no_pedestrian", "The same oncoming traffic with nobody hidden: any slowing is over-caution.",
+        ScenarioParams(initial_speed=11.0, ped_present=False,
+                       moving_vehicles=(MovingVehicle(x=85.0, speed=-10.0, y=3.5),
+                                        MovingVehicle(x=100.0, speed=-9.0, y=3.5, length=6.0, width=2.2)))),
 ]
 
 SCENARIOS: dict[str, NamedScenario] = {s.name: s for s in _LIST}

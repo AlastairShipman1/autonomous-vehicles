@@ -109,6 +109,7 @@ def summarize(rows: list[Row]) -> dict[str, SummaryEntry]:
         pen = [m.time_penalty for m in group]
         s["time_penalty_s"] = bootstrap_mean(pen)
         s["n_time_penalty"] = int(np.isfinite(pen).sum())
+        s["vehicle_collision_rate"] = wilson_interval(sum(m.vehicle_collision for m in group), len(group))
         out[name] = s
     return out
 
