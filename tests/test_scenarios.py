@@ -5,7 +5,7 @@ import pytest
 
 from av_core.control import Controller
 
-from av_core.plan import RuleBasedPlanner, RuleBasedPlannerV1
+from av_core.plan import AIFPlanner, RuleBasedPlanner, RuleBasedPlannerV1
 from av_core.predict import ConstantVelocityPredictor
 from av_sim_toy import SCENARIOS, ScenarioParams, ToySim, Vehicle, run_episode
 from av_sim_toy.sweep import to_record
@@ -225,5 +225,162 @@ def test_rendering_a_frame_with_several_pedestrians_draws_each():
     try:
         circles = [p for p in fig.axes[0].patches if p.__class__.__name__ == "Circle"]
         assert len(circles) == 2
+    finally:
+        plt.close(fig)
+
+
+# --- moving vehicles -----------------------------------------------------------------------------
+
+import math  # noqa: E402
+
+from av_core.geometry import convex_polygons_overlap, rect_corners  # noqa: E402
+from av_core.sweep import format_summary, run_sweep, summarize  # noqa: E402
+from av_core.types import PlannerCommand  # noqa: E402
+from av_sim_toy import MovingVehicle  # noqa: E402
+
+
+class FullSpeed:
+    """A planner that never slows: for provoking collisions."""
+
+    def plan(self, world, route, predictions=()):
+        return PlannerCommand(world.stamp, 13.9, "route")
+
+
+def test_overlap_test_for_convex_polygons():
+    a = rect_corners(0, 0, 0, 4, 2)
+    assert convex_polygons_overlap(a, rect_corners(3, 0, 0, 4, 2))  # overlapping
+    assert not convex_polygons_overlap(a, rect_corners(5, 0, 0, 4, 2))  # apart
+    assert convex_polygons_overlap(a, rect_corners(4, 0, 0, 4, 2))  # sharing an edge: touching counts
+    assert not convex_polygons_overlap(a, rect_corners(4, 0, 0, 4, 2), touching=False)
+    assert convex_polygons_overlap(a, rect_corners(2.5, 1.5, 0.7, 4, 2))  # rotated, clipping a corner
+    assert not convex_polygons_overlap(a, rect_corners(4.5, 3.5, 0.7, 4, 2))
+    assert convex_polygons_overlap(a, rect_corners(0, 0, math.pi / 2, 1, 1))  # contained
+
+
+def test_moving_vehicle_validation_and_heading():
+    assert MovingVehicle(30.0, 8.0).yaw == 0.0 and MovingVehicle(30.0, -8.0).yaw == pytest.approx(math.pi)
+    with pytest.raises(ValueError, match="on top of the ego"):
+        ScenarioParams(moving_vehicles=(MovingVehicle(5.0, 8.0),))
+    ScenarioParams(moving_vehicles=(MovingVehicle(5.0, -8.0, y=3.5),))  # oncoming, in the other lane
+    ScenarioParams(moving_vehicles=(MovingVehicle(30.0, 8.0),))
+
+
+def test_moving_vehicles_advance_at_their_speed_and_oncoming_ones_go_the_other_way():
+    sim = ToySim(ScenarioParams(ped_present=False, moving_vehicles=(MovingVehicle(30.0, 8.0), MovingVehicle(60.0, -10.0, y=3.5))))
+    ctl = Controller()
+    for _ in range(40):  # 2 s
+        w = sim.world_model()
+        sim.step(ctl.step(w.stamp, w.ego, sim.route, 5.0, sim.dt), ctl.max_steer_angle)
+    assert sim.moving_pose(0)[0] == pytest.approx(30.0 + 8.0 * 2.0, abs=1e-6)
+    assert sim.moving_pose(1)[0] == pytest.approx(60.0 - 10.0 * 2.0, abs=1e-6)
+    agents = {a.id: a for a in sim.world_model().agents}
+    assert agents[30].vx == 8.0 and agents[31].vx == -10.0 and not agents[30].is_static
+    assert agents[31].yaw == pytest.approx(math.pi) and agents[31].y == 3.5
+    assert {30, 31} <= {r.occluder_id for r in sim.world_model().occluded}  # they cast shadows too
+
+
+def test_a_braking_vehicle_slows_at_its_rate_to_brake_to_and_holds():
+    sim = ToySim(ScenarioParams(ped_present=False, moving_vehicles=(MovingVehicle(60.0, 10.0, brake_time=1.0, brake_decel=4.0, brake_to=2.0),)))
+    ctl, speeds = Controller(), []
+    for _ in range(100):  # 5 s
+        w = sim.world_model()
+        sim.step(ctl.step(w.stamp, w.ego, sim.route, 3.0, sim.dt), ctl.max_steer_angle)
+        speeds.append(sim.moving_state[0][1])
+    assert speeds[18] == 10.0  # not yet braking at t = 0.95 s
+    assert speeds[30] == pytest.approx(10.0 - 4.0 * (31 * 0.05 - 1.0), abs=0.05)  # braking at 4 m/s²
+    assert speeds[-1] == 2.0 and speeds[-5] == 2.0  # held
+
+
+def test_a_moving_vehicle_blocks_the_view_of_the_pedestrian():
+    base = dict(ped_trigger_distance=0.0, ped_x=54.0, occluder_length=4.5, occluder_x=50.0)
+    plain = ToySim(ScenarioParams(**base))
+    truck = ToySim(ScenarioParams(**base, moving_vehicles=(MovingVehicle(30.0, 0.0, length=10.0, width=2.5),)))
+    far_lane = ToySim(ScenarioParams(**base, moving_vehicles=(MovingVehicle(30.0, 0.0, y=3.5, length=10.0),)))
+    for sim in (plain, truck, far_lane):
+        sim.state = sim.state.__class__(12.0, 0.0, 0.0, 5.0)  # truck x 25 to 35, dead ahead of the ego
+    assert plain.ped_visible() and not truck.ped_visible()  # the truck in the lane hides what the parked car lets through
+    assert far_lane.ped_visible()  # the same truck in the far lane hides nothing on the near side
+
+
+def test_ego_hitting_a_vehicle_ends_the_episode_and_is_reported():
+    params = ScenarioParams(ped_present=False, moving_vehicles=(MovingVehicle(40.0, 0.0),))  # stopped in the lane
+    ep = run_episode(params, FullSpeed())
+    assert ep.outcome == "collision" and ep.hit_vehicle
+    rec = to_record(ep)
+    m = compute_metrics(rec)
+    assert rec.hit_vehicle and m.vehicle_collision and m.collision is None  # no pedestrian: the pedestrian metric is silent
+    ok = compute_metrics(to_record(run_episode(ScenarioParams(ped_present=False), RuleBasedPlanner())))
+    assert ok.vehicle_collision is False
+
+
+def test_a_planner_that_sees_the_lead_vehicle_does_not_hit_it():
+    for planner in (RuleBasedPlanner(), RuleBasedPlannerV1()):
+        ep = run_episode(SCENARIOS["lead_brakes_hard"].params, planner, predictor=ConstantVelocityPredictor())
+        assert ep.outcome == "finished" and not ep.hit_vehicle
+
+
+def test_vehicle_collision_rate_is_in_the_summary_and_csv(tmp_path):
+    from av_core.sweep import read_csv, write_csv
+
+    class Stopped:  # a scenario factory: one episode that rear-ends a stopped car, one that does not
+        def __init__(self, seed):
+            self.seed = seed
+
+        def run(self, planner, predictor=None):
+            moving = (MovingVehicle(40.0, 0.0),) if self.seed == 0 else ()
+            return to_record(run_episode(ScenarioParams(ped_present=False, moving_vehicles=moving), planner))
+
+    rows = run_sweep([0, 1], Stopped, FullSpeed)
+    s = summarize(rows)["pedestrian absent"]
+    assert s["vehicle_collision_rate"][0] == 0.5 and "vehicle_collision_rate" in format_summary(summarize(rows))
+    csv_rows = read_csv(write_csv(rows, tmp_path / "e.csv"))
+    assert [r["vehicle_collision"] for r in csv_rows] == ["1", "0"] and csv_rows[0]["param_n_moving_vehicles"] == "1"
+
+
+def test_planners_ignore_oncoming_traffic_in_the_other_lane():
+    with_traffic = SCENARIOS["oncoming_no_pedestrian"].params
+    without = dataclasses.replace(with_traffic, moving_vehicles=())
+    for planner_cls in (RuleBasedPlanner, RuleBasedPlannerV1):
+        a = run_episode(with_traffic, planner_cls(), predictor=ConstantVelocityPredictor())
+        b = run_episode(without, planner_cls(), predictor=ConstantVelocityPredictor())
+        assert a.outcome == b.outcome == "finished" and not a.hit_vehicle
+        assert a.ego[:, 3].min() == pytest.approx(b.ego[:, 3].min(), abs=0.3)
+
+
+def test_the_pedestrian_never_overlaps_a_moving_vehicle_in_the_oncoming_scenario():
+    for planner, predictor in ((RuleBasedPlanner(), None), (RuleBasedPlannerV1(), ConstantVelocityPredictor()), (AIFPlanner(), None)):
+        ep = run_episode(SCENARIOS["oncoming_traffic"].params, planner, predictor=predictor)
+        for k in range(len(ep.t)):
+            for j, mv in enumerate(ep.params.moving_vehicles):
+                rect = rect_corners(*ep.moving[k, j], mv.length, mv.width)
+                assert distance_to(rect, ep.peds[k, 0]) > 0.3, (type(planner).__name__, k, j)
+
+
+def distance_to(rect, p):
+    from av_core.geometry import distance_point_to_rect
+
+    return distance_point_to_rect(rect, p)
+
+
+def test_every_moving_vehicle_scenario_runs_for_every_planner_without_hitting_a_vehicle():
+    names = ("slow_lead_car", "lead_brakes_hard", "follow_the_leader", "truck_ahead_hides_view",
+             "oncoming_traffic", "oncoming_no_pedestrian")
+    for name in names:
+        for planner in (RuleBasedPlanner(), RuleBasedPlannerV1()):
+            ep = run_episode(SCENARIOS[name].params, planner, predictor=ConstantVelocityPredictor())
+            assert not ep.hit_vehicle and ep.outcome == "finished", (name, type(planner).__name__)
+
+
+def test_rendering_draws_moving_vehicles_and_an_oncoming_lane():
+    import matplotlib.pyplot as plt
+
+    from av_sim_toy import render_frame
+
+    ep = run_episode(SCENARIOS["oncoming_traffic"].params, RuleBasedPlanner())
+    fig = render_frame(ep, 20)
+    try:
+        polys = [p for p in fig.axes[0].patches if p.__class__.__name__ == "Polygon" and p.get_facecolor()[:3] != (0.0, 0.0, 0.0)]
+        moving_faces = [p for p in polys if p.get_zorder() == 4 and np.allclose(p.get_facecolor()[:3], (0x7a / 255, 0x9e / 255, 0x7e / 255))]
+        assert len(moving_faces) == 2
     finally:
         plt.close(fig)

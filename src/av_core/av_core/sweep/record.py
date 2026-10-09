@@ -35,6 +35,7 @@ class EpisodeRecord:
     occluder_near_x: float  # x of the occluder's near end
     occluder_far_x: float
     outcome: Outcome
+    hit_vehicle: bool = False  # the ego ran into another vehicle (a collision with a pedestrian is read from ``ped``)
     params: dict[str, ParamValue] = field(default_factory=dict)  # scenario parameters, copied into the CSV
 
     def __post_init__(self) -> None:

@@ -7,8 +7,10 @@ pedestrian present (n = 96)
   min_ttc_s            0.08  (95% CI 0.00 to 0.23)   [defined in 24]
   braking_onset_m      -3.48  (95% CI -5.34 to -1.63)   [defined in 17]
   time_penalty_s       -1.97  (95% CI -2.18 to -1.76)   [defined in 73]
+  vehicle_collision_rate 0.0%  (95% CI 0.0% to 3.8%)
 
 pedestrian absent (n = 104)
   needless_stop_rate   0.0%  (95% CI 0.0% to 3.6%)
   braking_onset_m      nan  (95% CI nan to nan)   [defined in 0]
   time_penalty_s       -2.03  (95% CI -2.23 to -1.84)   [defined in 104]
+  vehicle_collision_rate 0.0%  (95% CI 0.0% to 3.6%)

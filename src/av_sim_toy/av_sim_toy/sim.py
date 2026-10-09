@@ -13,6 +13,7 @@ import numpy as np
 from av_core.control import BicycleState, Controller, accel_from_pedals, ego_center, step
 from av_core.geometry import (
     SENSOR_RANGE,
+    convex_polygons_overlap,
     densify,
     distance_point_to_rect,
     is_visible,
@@ -28,6 +29,7 @@ from av_sim_toy.scenario import ScenarioParams
 OCCLUDER_ID, PED_ID = 1, 2
 EXTRA_ID_BASE = 10  # extra parked vehicles are agents 10, 11, ...
 EXTRA_PED_BASE = 20  # pedestrians after the primary one are agents 21, 22, ...
+MOVING_BASE = 30  # moving vehicles are agents 30, 31, ...
 
 
 def make_route() -> Route:
@@ -43,6 +45,9 @@ class ToySim:
         self._peds = params.pedestrians  # the primary one (if present) first, then the extras
         self.ped_trigger_steps: list[int | None] = [None] * len(self._peds)
         self.outcome: Outcome | None = None
+        # moving vehicles: current [x, speed] each; they accelerate nowhere, they only brake once
+        self._moving = params.moving_vehicles
+        self.moving_state = [[mv.x, mv.speed] for mv in self._moving]
         # (agent id, vehicle, rectangle) for the primary occluder and every extra vehicle
         self._vehicles = [(OCCLUDER_ID if i == 0 else EXTRA_ID_BASE + i - 1, v,
                            rect_corners(v.x, v.y, 0.0, v.length, v.width)) for i, v in enumerate(params.vehicles)]
@@ -115,9 +120,34 @@ class ToySim:
     def ped_moving(self) -> bool:
         return self.params.ped_present and self.ped_moving_at(0)
 
+    # moving vehicles
+
+    @property
+    def n_moving(self) -> int:
+        return len(self._moving)
+
+    def moving_pose(self, j: int) -> tuple[float, float, float]:
+        """(x, y, yaw) of moving vehicle ``j``."""
+        mv = self._moving[j]
+        return self.moving_state[j][0], mv.y, mv.yaw
+
+    def moving_rect(self, j: int) -> np.ndarray:
+        mv = self._moving[j]
+        x, y, yaw = self.moving_pose(j)
+        return rect_corners(x, y, yaw, mv.length, mv.width)
+
+    def moving_poses(self) -> np.ndarray:
+        """(M, 3) x, y, yaw of every moving vehicle; shape (0, 3) when there are none."""
+        return np.array([self.moving_pose(j) for j in range(self.n_moving)]).reshape(-1, 3)
+
+    def occluder_rects(self) -> list[tuple[int, np.ndarray]]:
+        """(agent id, rectangle) of everything that blocks sight right now: parked and moving vehicles."""
+        return [(i, rect) for i, _, rect in self._vehicles] + [(MOVING_BASE + j, self.moving_rect(j))
+                                                              for j in range(self.n_moving)]
+
     def ped_visible_at(self, i: int) -> bool:
         front, xy = self.ego_front(), self.ped_xy_at(i)
-        return all(is_visible(front, xy, rect, SENSOR_RANGE) for _, _, rect in self._vehicles)
+        return all(is_visible(front, xy, rect, SENSOR_RANGE) for _, rect in self.occluder_rects())
 
     def peds_visible(self) -> np.ndarray:
         """(P,) bool; one False when there are no pedestrians."""
@@ -141,8 +171,12 @@ class ToySim:
                 vy = -ped.side * ped.speed if self.ped_moving_at(i) else 0.0
                 agents.append(Agent(self.ped_id(i), AgentClass.PEDESTRIAN, xy[0], xy[1], -ped.side * math.pi / 2, 0.0, vy,
                                     2 * sc.PED_RADIUS, 2 * sc.PED_RADIUS, False))
+        for j, mv in enumerate(self._moving):
+            vx = self.moving_state[j][1]
+            agents.append(Agent(MOVING_BASE + j, AgentClass.VEHICLE, self.moving_pose(j)[0], mv.y, mv.yaw,
+                                vx, 0.0, mv.length, mv.width, False))
         front = self.ego_front()
-        shadows = [(i, shadow_polygon(front, rect, SENSOR_RANGE)) for i, _, rect in self._vehicles]
+        shadows = [(i, shadow_polygon(front, rect, SENSOR_RANGE)) for i, rect in self.occluder_rects()]
         occluded = tuple(OccludedRegion(i, sh) for i, sh in shadows if sh is not None)
         return WorldModel(self.time, ego, tuple(agents), occluded, ())
 
@@ -153,6 +187,12 @@ class ToySim:
         self.state = step(self.state, accel_from_pedals(cmd.throttle, cmd.brake),
                           cmd.steer * max_steer_angle, sc.EGO_WHEELBASE, self.dt)
         self.step_count += 1
+        for j, mv in enumerate(self._moving):  # advance the moving vehicles
+            x, v = self.moving_state[j]
+            if mv.brake_time is not None and self.time - self.dt >= mv.brake_time - 1e-9:
+                floor = abs(mv.brake_to)
+                v = math.copysign(max(floor, abs(v) - mv.brake_decel * self.dt), v) if abs(v) > floor else v
+            self.moving_state[j] = [x + 0.5 * (self.moving_state[j][1] + v) * self.dt, v]
         for i, ped in enumerate(self._peds):
             if self.ped_trigger_steps[i] is None and ped.x - self.ego_front()[0] <= ped.trigger_distance:
                 self.ped_trigger_steps[i] = self.step_count
@@ -162,8 +202,13 @@ class ToySim:
         corners = self.ego_corners()
         return any(distance_point_to_rect(corners, self.ped_xy_at(i)) <= sc.PED_RADIUS for i in range(self.n_peds))
 
+    def hit_vehicle(self) -> bool:
+        """Whether the ego rectangle overlaps any vehicle, parked or moving."""
+        ego = self.ego_corners()
+        return any(convex_polygons_overlap(ego, rect) for _, rect in self.occluder_rects())
+
     def _check_end(self) -> Outcome | None:
-        if self.collided():
+        if self.collided() or self.hit_vehicle():
             return "collision"
         if self.ego_rear()[0] > self.params.far_x + sc.END_MARGIN:
             return "finished"
@@ -190,6 +235,9 @@ class Episode:
     outcome: Outcome
     final_ego: np.ndarray = field(default_factory=lambda: np.zeros(4))  # state after the last step
     final_peds: np.ndarray = field(default_factory=lambda: np.full((1, 2), np.nan))  # (P, 2)
+    moving: np.ndarray = field(default_factory=lambda: np.zeros((0, 0, 3)))  # (N, M, 3): x, y, yaw of each moving vehicle
+    final_moving: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))  # (M, 3)
+    hit_vehicle: bool = False  # the episode ended with the ego hitting a vehicle
 
     @property
     def ped(self) -> np.ndarray:
@@ -214,6 +262,7 @@ def run_episode(params: ScenarioParams, planner: Planner, controller: Controller
     ego: list[list[float]] = []
     peds: list[np.ndarray] = []
     vis: list[np.ndarray] = []
+    moving: list[np.ndarray] = []
     tgt: list[float] = []
     reason: list[str] = []
     thr: list[float] = []
@@ -228,6 +277,7 @@ def run_episode(params: ScenarioParams, planner: Planner, controller: Controller
         ego.append([sim.state.x, sim.state.y, sim.state.yaw, sim.state.speed])
         peds.append(sim.peds_xy())
         vis.append(sim.peds_visible())
+        moving.append(sim.moving_poses())
         tgt.append(plan.target_speed)
         reason.append(plan.reason)
         thr.append(cmd.throttle)
@@ -241,5 +291,6 @@ def run_episode(params: ScenarioParams, planner: Planner, controller: Controller
         reason=reason, throttle=np.array(thr), brake=np.array(brk),
         steer=np.array(steer), outcome=sim.outcome,
         final_ego=np.array([sim.state.x, sim.state.y, sim.state.yaw, sim.state.speed]),
-        final_peds=sim.peds_xy(),
+        final_peds=sim.peds_xy(), moving=np.array(moving), final_moving=sim.moving_poses(),
+        hit_vehicle=sim.hit_vehicle(),
     )

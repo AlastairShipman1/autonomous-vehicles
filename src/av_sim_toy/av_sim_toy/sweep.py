@@ -15,9 +15,11 @@ from av_sim_toy.sim import Episode, run_episode
 
 def to_record(ep: Episode) -> EpisodeRecord:
     p = ep.params
-    params = {k: v for k, v in asdict(p).items() if k not in ("seed", "extra_vehicles", "extra_pedestrians")}
+    params = {k: v for k, v in asdict(p).items()
+              if k not in ("seed", "extra_vehicles", "extra_pedestrians", "moving_vehicles")}
     params["n_extra_vehicles"] = len(p.extra_vehicles)
     params["n_pedestrians"] = len(p.pedestrians)
+    params["n_moving_vehicles"] = len(p.moving_vehicles)
     params["split"] = split_of(p.seed) if p.seed is not None else ""
     return EpisodeRecord(
         seed=-1 if p.seed is None else p.seed,
@@ -30,6 +32,7 @@ def to_record(ep: Episode) -> EpisodeRecord:
         occluder_near_x=p.near_x,
         occluder_far_x=p.far_x,
         outcome=ep.outcome,
+        hit_vehicle=ep.hit_vehicle,
         params=params,
     )
 

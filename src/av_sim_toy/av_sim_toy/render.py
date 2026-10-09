@@ -27,7 +27,7 @@ from av_sim_toy.sim import Episode  # noqa: E402
 VIEW_BEHIND, VIEW_AHEAD = 15.0, 75.0  # m of road shown behind / ahead of the ego front
 Y_LIM = (-8.0, 8.0)
 COLORS = dict(road="#d9d9d9", parking="#bdbdbd", walk="#eeeeee", ego="#1f77b4", occluder="#555555",
-              shadow="#f2a900", ped="#d62728", edge="#222222")
+              shadow="#f2a900", ped="#d62728", edge="#222222", moving="#7a9e7e")
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,7 @@ class _Frames:
     t: np.ndarray
     ego: np.ndarray
     ped: np.ndarray  # (K, P, 2)
+    moving: np.ndarray  # (K, M, 3): x, y, yaw
     target: np.ndarray
     reason: list[str]
 
@@ -45,6 +46,8 @@ def _frames(ep: Episode) -> _Frames:
         t=np.append(ep.t, ep.t[-1] + ep.dt),
         ego=np.vstack([ep.ego, ep.final_ego]),
         ped=np.concatenate([ep.peds, ep.final_peds[None]], axis=0),
+        moving=np.concatenate([ep.moving, ep.final_moving[None]], axis=0) if ep.moving.size else
+        np.zeros((len(ep.t) + 1, 0, 3)),
         target=np.append(ep.target_speed, ep.target_speed[-1]),
         reason=ep.reason + [ep.reason[-1]],
     )
@@ -66,10 +69,17 @@ class _Scene:
                                    fc=COLORS["parking"], lw=0))
             ax.add_patch(Rectangle((x0, sign * abs(sc.SIDEWALK_Y)), x1 - x0, sign * (abs(Y_LIM[0]) - abs(sc.SIDEWALK_Y)),
                                    fc=COLORS["walk"], lw=0))
+        if any(mv.y > sc.LANE_WIDTH / 2 for mv in p.moving_vehicles):  # an oncoming lane: draw it as road
+            ax.add_patch(Rectangle((x0, sc.LANE_WIDTH / 2), x1 - x0, sc.LANE_WIDTH, fc=COLORS["road"], lw=0, zorder=1.5))
+            ax.axhline(sc.LANE_WIDTH / 2, color="#f2c400", lw=1.5, zorder=1.6)
         ax.axhline(0.0, color="white", ls=(0, (6, 6)), lw=1)
         for rect in self.rects:
             ax.add_patch(Polygon(rect, fc=COLORS["occluder"], ec=COLORS["edge"], zorder=4))
-        self.shadows = [Polygon(np.zeros((3, 2)), fc=COLORS["shadow"], alpha=0.3, ec="none", zorder=3) for _ in self.rects]
+        self.moving = [Polygon(np.zeros((4, 2)), fc=COLORS["moving"], ec=COLORS["edge"], zorder=4) for _ in p.moving_vehicles]
+        for patch in self.moving:
+            ax.add_patch(patch)
+        n_shadows = len(self.rects) + len(p.moving_vehicles)
+        self.shadows = [Polygon(np.zeros((3, 2)), fc=COLORS["shadow"], alpha=0.3, ec="none", zorder=3) for _ in range(n_shadows)]
         self.ego = Polygon(np.zeros((4, 2)), fc=COLORS["ego"], ec=COLORS["edge"], zorder=5)
         self.peds = [Circle((0, 0), sc.PED_RADIUS, zorder=6) for _ in range(self.f.ped.shape[1])]
         for patch in (*self.shadows, self.ego, *self.peds):
@@ -87,7 +97,13 @@ class _Scene:
         self.ego.set_xy(rect_corners(cx, cy, yaw, sc.EGO_LENGTH, sc.EGO_WIDTH))
         front = np.array([x + 0.5 * (sc.EGO_LENGTH + sc.EGO_WHEELBASE) * math.cos(yaw),
                           y + 0.5 * (sc.EGO_LENGTH + sc.EGO_WHEELBASE) * math.sin(yaw)])
-        for patch, rect in zip(self.shadows, self.rects):
+        p = ep.params
+        moving_rects = [rect_corners(x_, y_, yaw_, mv.length, mv.width)
+                        for (x_, y_, yaw_), mv in zip(f.moving[k], p.moving_vehicles)]
+        for patch, rect in zip(self.moving, moving_rects):
+            patch.set_xy(rect)
+        all_rects = [*self.rects, *moving_rects]
+        for patch, rect in zip(self.shadows, all_rects):
             shadow = shadow_polygon(front, rect, SENSOR_RANGE)
             patch.set_visible(shadow is not None)
             if shadow is not None:
@@ -95,7 +111,7 @@ class _Scene:
         for patch, pxy in zip(self.peds, f.ped[k]):
             patch.set_visible(not np.isnan(pxy[0]))
             if not np.isnan(pxy[0]):
-                seen = all(is_visible(front, pxy, rect, SENSOR_RANGE) for rect in self.rects)
+                seen = all(is_visible(front, pxy, rect, SENSOR_RANGE) for rect in all_rects)
                 patch.center = (float(pxy[0]), float(pxy[1]))
                 patch.set(fc=COLORS["ped"] if seen else "none", ec=COLORS["ped"], ls="-" if seen else "--", lw=1.5)
         self.ax.set_xlim(front[0] - VIEW_BEHIND, front[0] + VIEW_AHEAD)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 # Fixed road geometry (metres, map frame; the road runs along +x).
@@ -38,6 +39,30 @@ class Vehicle:
     @property
     def far_x(self) -> float:
         return self.x + 0.5 * self.length
+
+
+@dataclass(frozen=True)
+class MovingVehicle:
+    """A vehicle driving along the road at constant speed, optionally braking to a stop.
+
+    ``speed`` is signed along +x: positive goes the ego's way, negative is oncoming (it then faces -x). ``y`` is its lane
+    centre: 0 for the ego's lane (a lead vehicle), +3.5 for an oncoming lane to its left. From ``brake_time`` (s) it
+    decelerates at ``brake_decel`` until it reaches ``brake_to``. It occludes while it moves, and the ego hitting it ends the episode;
+    pedestrians do not react to it and it does not react to anything.
+    """
+
+    x: float
+    speed: float
+    y: float = 0.0
+    length: float = 4.5
+    width: float = 1.9
+    brake_time: float | None = None
+    brake_decel: float = 4.0
+    brake_to: float = 0.0  # speed (magnitude) it brakes down to; it then holds that speed
+
+    @property
+    def yaw(self) -> float:
+        return 0.0 if self.speed >= 0 else math.pi
 
 
 @dataclass(frozen=True)
@@ -81,6 +106,7 @@ class ScenarioParams:
     extra_vehicles: tuple[Vehicle, ...] = ()
     ped_from_left: bool = False
     extra_pedestrians: tuple[Pedestrian, ...] = ()  # more pedestrians, in addition to the primary one
+    moving_vehicles: tuple[MovingVehicle, ...] = ()
 
     @property
     def side(self) -> float:
@@ -115,6 +141,11 @@ class ScenarioParams:
         return max(v.far_x for v in self.vehicles)
 
     def __post_init__(self) -> None:
+        for i, mv in enumerate(self.moving_vehicles):
+            # must not start overlapping the ego (rear axle at x = 0, body from -0.9 to 3.8 m, 1.9 m wide)
+            if mv.x - 0.5 * mv.length < 3.8 + 1.0 and mv.x + 0.5 * mv.length > -0.9 and abs(mv.y) < 0.95 + 0.5 * mv.width:
+                raise ValueError(f"moving vehicle {i} starts on top of the ego (x {mv.x - 0.5 * mv.length:.1f} "
+                                 f"to {mv.x + 0.5 * mv.length:.1f})")
         # A pedestrian walks straight across; its path must not run through any parked vehicle.
         for i, ped in enumerate(self.pedestrians):
             for v in self.vehicles:
