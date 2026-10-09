@@ -30,7 +30,14 @@ class ScenarioParams:
     occluder_x: float = 50.0  # centre
     occluder_length: float = 6.0
     ped_present: bool = True
-    ped_x: float = 50.0
+    ped_x: float = 54.0  # past the default occluder's far end (53)
     ped_speed: float = 1.4
     ped_trigger_distance: float = 20.0  # ego front this far short of ped_x starts the walk
     seed: int | None = None
+
+    def __post_init__(self) -> None:
+        # The pedestrian walks straight in +y; its path must not run through the parked vehicle.
+        if self.ped_present and abs(self.ped_x - self.occluder_x) < 0.5 * self.occluder_length + PED_RADIUS:
+            raise ValueError(f"ped_x={self.ped_x} puts the pedestrian's path through the occluder "
+                             f"(x {self.occluder_x - 0.5 * self.occluder_length:.2f} to "
+                             f"{self.occluder_x + 0.5 * self.occluder_length:.2f})")

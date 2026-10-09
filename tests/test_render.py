@@ -12,7 +12,7 @@ PLANNER = RuleBasedPlanner()
 
 
 def episode_with_hidden_ped():
-    p = ScenarioParams(initial_speed=12.0, occluder_length=10.0, ped_x=50.0, ped_trigger_distance=20.0)
+    p = ScenarioParams(initial_speed=12.0, occluder_length=10.0, ped_x=56.0, ped_trigger_distance=20.0)
     return run_episode(p, PLANNER)
 
 
@@ -30,7 +30,7 @@ def test_render_frame_shows_hidden_pedestrian_dashed_and_label():
 
 def test_render_frame_visible_pedestrian_solid_and_outcome_on_last_frame():
     ep = episode_with_hidden_ped()
-    fig = render_frame(ep, 0)  # seen from afar
+    fig = render_frame(ep, int(np.flatnonzero(ep.ped_visible)[-1]))  # revealed as the ego draws level
     try:
         ped = next(p for p in fig.axes[0].patches if p.__class__.__name__ == "Circle")
         assert ped.get_linestyle() == "-" and ped.get_facecolor()[3] == 1.0
