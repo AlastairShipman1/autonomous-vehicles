@@ -21,12 +21,12 @@ FINISH_MARGIN = 30.0  # m past the occluder's far end, measured at the ego's rea
 
 
 def _ego_frame(rec: EpisodeRecord):
-    """Per-row rectangle centre and heading, and the pedestrian position in the ego frame."""
+    """Per-row heading and speed, and every pedestrian's position in the ego frame, shape (N, P, 2)."""
     x, y, yaw, v = rec.ego.T
     cx, cy = x + 0.5 * rec.ego_wheelbase * np.cos(yaw), y + 0.5 * rec.ego_wheelbase * np.sin(yaw)
-    dx, dy = rec.ped[:, 0] - cx, rec.ped[:, 1] - cy
-    c, s = np.cos(yaw), np.sin(yaw)
-    local = np.column_stack([c * dx + s * dy, -s * dx + c * dy])
+    dx, dy = rec.ped[:, :, 0] - cx[:, None], rec.ped[:, :, 1] - cy[:, None]
+    c, s = np.cos(yaw)[:, None], np.sin(yaw)[:, None]
+    local = np.stack([c * dx + s * dy, -s * dx + c * dy], axis=-1)
     return local, yaw, v
 
 
@@ -37,23 +37,25 @@ def _rect_distance(local: np.ndarray, rec: EpisodeRecord) -> np.ndarray:
 
 
 def pedestrian_distances(rec: EpisodeRecord) -> np.ndarray:
-    """Distance from the pedestrian centre to the ego rectangle at every row (0 when inside)."""
+    """Distance from each pedestrian's centre to the ego rectangle at every row, (N, P); 0 when inside, NaN if absent."""
     local, _, _ = _ego_frame(rec)
     return _rect_distance(local, rec)
 
 
 def collision(rec: EpisodeRecord) -> bool | None:
+    """Whether the ego rectangle overlapped any pedestrian's disc at any row."""
     if not rec.ped_present:
         return None
-    return bool(pedestrian_distances(rec).min() <= rec.ped_radius)
+    return bool(np.nanmin(pedestrian_distances(rec)) <= rec.ped_radius)
 
 
 def min_distance(rec: EpisodeRecord) -> float | None:
-    return float(pedestrian_distances(rec).min()) if rec.ped_present else None
+    """Smallest distance from any pedestrian's centre to the ego rectangle over the episode."""
+    return float(np.nanmin(pedestrian_distances(rec))) if rec.ped_present else None
 
 
 def min_ttc(rec: EpisodeRecord) -> float | None:
-    """Smallest, over the episode, time until overlap if ego and pedestrian held their current velocities.
+    """Smallest, over the episode and the pedestrians, time until overlap if both held their current velocities.
 
     Velocities are the displacement over the next row (the last row reuses the previous one), searched to
     5 s on a 0.01 s grid; ``inf`` if they never overlap. 0 when already overlapping.
@@ -61,16 +63,22 @@ def min_ttc(rec: EpisodeRecord) -> float | None:
     if not rec.ped_present:
         return None
     local, yaw, v = _ego_frame(rec)
-    vp = np.diff(rec.ped, axis=0) / np.diff(rec.t)[:, None]
-    vp = np.vstack([vp, vp[-1]])
-    c, s = np.cos(yaw), np.sin(yaw)
-    rel = np.column_stack([c * vp[:, 0] + s * vp[:, 1] - v, -s * vp[:, 0] + c * vp[:, 1]])  # ped minus ego, ego frame
+    vp = np.diff(rec.ped, axis=0) / np.diff(rec.t)[:, None, None]
+    vp = np.concatenate([vp, vp[-1:]], axis=0)  # (N, P, 2)
+    c, s = np.cos(yaw)[:, None], np.sin(yaw)[:, None]
+    rel = np.stack([c * vp[..., 0] + s * vp[..., 1] - v[:, None], -s * vp[..., 0] + c * vp[..., 1]], axis=-1)
     t = np.arange(0.0, TTC_HORIZON + TTC_STEP / 2, TTC_STEP)
-    pos = local[:, None, :] + rel[:, None, :] * t[None, :, None]  # (N, T, 2)
-    hit = _rect_distance(pos, rec) <= rec.ped_radius
-    first = np.where(hit.any(axis=1), hit.argmax(axis=1), -1)
-    ttcs = t[first[first >= 0]]
-    return float(ttcs.min()) if ttcs.size else math.inf
+    best = math.inf
+    for p in range(rec.ped.shape[1]):
+        if np.isnan(rec.ped[:, p]).all():
+            continue
+        pos = local[:, p, None, :] + rel[:, p, None, :] * t[None, :, None]  # (N, T, 2)
+        hit = _rect_distance(pos, rec) <= rec.ped_radius
+        first = np.where(hit.any(axis=1), hit.argmax(axis=1), -1)
+        ttcs = t[first[first >= 0]]
+        if ttcs.size:
+            best = min(best, float(ttcs.min()))
+    return best
 
 
 def braking_onset(rec: EpisodeRecord) -> float:

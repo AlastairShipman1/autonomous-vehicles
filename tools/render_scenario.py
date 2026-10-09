@@ -34,7 +34,7 @@ def run_one(name: str, planner_name: str, out: Path | None, stride: int) -> str:
         render_episode(ep, out / f"{name}__{planner_name}.mp4", stride=stride, title=f"{name}  |  planner {planner_name}")
     dist = "-" if m.min_distance is None else f"{m.min_distance:5.2f}"
     penalty = "  n/a" if m.time_penalty != m.time_penalty else f"{m.time_penalty:5.1f}"
-    return (f"{name:<22}{planner_name:<5}{ep.outcome:<11}{m.duration:6.1f}  "
+    return (f"{name:<28}{planner_name:<5}{ep.outcome:<11}{m.duration:6.1f}  "
             f"min v {ep.ego[:, 3].min():5.1f}   min dist {dist:>5}   penalty {penalty}")
 
 
@@ -51,13 +51,13 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.list:
         for s in SCENARIOS.values():
-            print(f"{s.name:<22}{s.description}")
+            print(f"{s.name:<28}{s.description}")
         return
     names = list(SCENARIOS) if args.all or not args.names else args.names
     unknown = [n for n in names if n not in SCENARIOS]
     if unknown:
         raise SystemExit(f"unknown scenario(s) {unknown}; try --list")
-    print(f"{'scenario':<22}{'plan':<5}{'outcome':<11}{'dur':>6}")
+    print(f"{'scenario':<28}{'plan':<5}{'outcome':<11}{'dur':>6}")
     for name in names:
         for planner in args.planner:
             print(run_one(name, planner, None if args.no_video else args.out, args.stride), flush=True)

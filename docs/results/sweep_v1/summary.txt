@@ -1,8 +1,8 @@
-planner v1, seeds reporting (200 episodes, 23 s)
+planner v1, seeds reporting (200 episodes, 22 s)
 
 pedestrian present (n = 96)
   collision_rate       0.0%  (95% CI 0.0% to 3.8%)
-  min_distance_m       3.15  (95% CI 2.95 to 3.33)
+  min_distance_m       2.96  (95% CI 2.80 to 3.10)
   finite_ttc_rate      100.0%  (95% CI 96.2% to 100.0%)
   min_ttc_s            1.33  (95% CI 1.29 to 1.38)   [defined in 96]
   braking_onset_m      20.29  (95% CI 19.85 to 20.74)   [defined in 96]
