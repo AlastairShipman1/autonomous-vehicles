@@ -33,7 +33,7 @@ def test_reproducible_across_fresh_interpreter_state():
 def test_pedestrian_path_never_crosses_the_occluder():
     from av_sim_toy import ScenarioParams
 
-    with pytest.raises(ValueError, match="through the occluder"):
+    with pytest.raises(ValueError, match="through a parked vehicle"):
         ScenarioParams(occluder_x=50.0, occluder_length=6.0, ped_x=52.0)
     ScenarioParams(occluder_x=50.0, occluder_length=6.0, ped_x=53.4)  # clears the car and the 0.3 m radius
     ScenarioParams(occluder_x=50.0, occluder_length=6.0, ped_x=52.0, ped_present=False)  # no pedestrian, no path

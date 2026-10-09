@@ -1,4 +1,4 @@
-"""The toy sim: ego on the bicycle model, a parked occluder, an optional hidden pedestrian.
+"""The toy sim: ego on the bicycle model, parked vehicles beside the road, an optional hidden pedestrian.
 
 Deterministic: the same parameters and controller give a bit-identical trajectory.
 """
@@ -26,6 +26,7 @@ from av_sim_toy import scenario as sc
 from av_sim_toy.scenario import ScenarioParams
 
 OCCLUDER_ID, PED_ID = 1, 2
+EXTRA_ID_BASE = 10  # extra parked vehicles are agents 10, 11, ...
 
 
 def make_route() -> Route:
@@ -40,8 +41,9 @@ class ToySim:
         self.step_count = 0
         self.ped_trigger_step: int | None = None
         self.outcome: Outcome | None = None
-        self._occluder = rect_corners(params.occluder_x, sc.PARKING_CENTER_Y, 0.0,
-                                      params.occluder_length, sc.OCCLUDER_WIDTH)
+        # (agent id, vehicle, rectangle) for the primary occluder and every extra vehicle
+        self._vehicles = [(OCCLUDER_ID if i == 0 else EXTRA_ID_BASE + i - 1, v,
+                           rect_corners(v.x, v.y, 0.0, v.length, v.width)) for i, v in enumerate(params.vehicles)]
 
     # --- geometry -------------------------------------------------------------------------
 
@@ -71,30 +73,40 @@ class ToySim:
         if not p.ped_present:
             return None
         walked = 0.0 if self.ped_trigger_step is None else (self.step_count - self.ped_trigger_step) * self.dt * p.ped_speed
-        return np.array([p.ped_x, sc.PED_START_Y + walked])
+        walked = min(walked, 2.0 * abs(sc.PED_START_Y))  # stops on the far sidewalk
+        return np.array([p.ped_x, p.ped_y0 - p.side * walked])
 
     def ped_walking(self) -> bool:
         return self.ped_trigger_step is not None
 
+    def ped_moving(self) -> bool:
+        """Triggered and not yet at the far sidewalk."""
+        xy = self.ped_xy()
+        return self.ped_walking() and xy is not None and abs(xy[1] - self.params.ped_y0) < 2.0 * abs(sc.PED_START_Y) - 1e-9
+
     def ped_visible(self) -> bool:
         xy = self.ped_xy()
-        return xy is not None and is_visible(self.ego_front(), xy, self._occluder, SENSOR_RANGE)
+        if xy is None:
+            return False
+        front = self.ego_front()
+        return all(is_visible(front, xy, rect, SENSOR_RANGE) for _, _, rect in self._vehicles)
 
     # --- interface ------------------------------------------------------------------------
 
     def world_model(self) -> WorldModel:
         s, p = self.state, self.params
         ego = EgoState(s.x, s.y, s.yaw, s.speed, sc.EGO_LENGTH, sc.EGO_WIDTH, sc.EGO_WHEELBASE)
-        agents = [Agent(OCCLUDER_ID, AgentClass.VEHICLE, p.occluder_x, sc.PARKING_CENTER_Y, 0.0, 0.0, 0.0,
-                        p.occluder_length, sc.OCCLUDER_WIDTH, True)]
+        agents = [Agent(i, AgentClass.VEHICLE, v.x, v.y, 0.0, 0.0, 0.0, v.length, v.width, True)
+                  for i, v, _ in self._vehicles]
         if self.ped_visible():
             xy = self.ped_xy()
             assert xy is not None  # ped_visible() implies the pedestrian is present
-            vy = p.ped_speed if self.ped_walking() else 0.0
-            agents.append(Agent(PED_ID, AgentClass.PEDESTRIAN, xy[0], xy[1], math.pi / 2, 0.0, vy,
+            vy = -p.side * p.ped_speed if self.ped_moving() else 0.0
+            agents.append(Agent(PED_ID, AgentClass.PEDESTRIAN, xy[0], xy[1], -p.side * math.pi / 2, 0.0, vy,
                                 2 * sc.PED_RADIUS, 2 * sc.PED_RADIUS, False))
-        shadow = shadow_polygon(self.ego_front(), self._occluder, SENSOR_RANGE)
-        occluded = () if shadow is None else (OccludedRegion(OCCLUDER_ID, shadow),)
+        front = self.ego_front()
+        shadows = [(i, shadow_polygon(front, rect, SENSOR_RANGE)) for i, _, rect in self._vehicles]
+        occluded = tuple(OccludedRegion(i, sh) for i, sh in shadows if sh is not None)
         return WorldModel(self.time, ego, tuple(agents), occluded, ())
 
     def step(self, cmd: ControlCommand, max_steer_angle: float) -> None:
@@ -117,7 +129,7 @@ class ToySim:
     def _check_end(self) -> Outcome | None:
         if self.collided():
             return "collision"
-        if self.ego_rear()[0] > self._occluder[:, 0].max() + sc.END_MARGIN:
+        if self.ego_rear()[0] > self.params.far_x + sc.END_MARGIN:
             return "finished"
         if self.time >= sc.MAX_TIME - 1e-9:
             return "timeout"

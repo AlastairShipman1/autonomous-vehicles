@@ -15,8 +15,8 @@ from av_sim_toy.sim import Episode, run_episode
 
 def to_record(ep: Episode) -> EpisodeRecord:
     p = ep.params
-    half = 0.5 * p.occluder_length
-    params = {k: v for k, v in asdict(p).items() if k != "seed"}
+    params = {k: v for k, v in asdict(p).items() if k not in ("seed", "extra_vehicles")}
+    params["n_extra_vehicles"] = len(p.extra_vehicles)
     params["split"] = split_of(p.seed) if p.seed is not None else ""
     return EpisodeRecord(
         seed=-1 if p.seed is None else p.seed,
@@ -26,8 +26,8 @@ def to_record(ep: Episode) -> EpisodeRecord:
         ego_length=sc.EGO_LENGTH, ego_width=sc.EGO_WIDTH, ego_wheelbase=sc.EGO_WHEELBASE,
         ped=np.vstack([ep.ped, ep.final_ped]),
         ped_radius=sc.PED_RADIUS,
-        occluder_near_x=p.occluder_x - half,
-        occluder_far_x=p.occluder_x + half,
+        occluder_near_x=p.near_x,
+        occluder_far_x=p.far_x,
         outcome=ep.outcome,
         params=params,
     )
