@@ -41,6 +41,26 @@ class Vehicle:
 
 
 @dataclass(frozen=True)
+class Pedestrian:
+    """An extra pedestrian: waits on the sidewalk at ``x`` and walks straight across once the ego front is within
+    ``trigger_distance`` of ``x``. ``from_left`` starts it on the left sidewalk."""
+
+    x: float
+    speed: float = 1.4
+    trigger_distance: float = 20.0
+    from_left: bool = False
+
+    @property
+    def side(self) -> float:
+        """+1 if it starts on the left of the road, -1 on the right."""
+        return 1.0 if self.from_left else -1.0
+
+    @property
+    def y0(self) -> float:
+        return self.side * abs(PED_START_Y)
+
+
+@dataclass(frozen=True)
 class ScenarioParams:
     """Everything that varies between episodes; the sampler draws the single-car ones from a seed.
 
@@ -60,6 +80,7 @@ class ScenarioParams:
     seed: int | None = None
     extra_vehicles: tuple[Vehicle, ...] = ()
     ped_from_left: bool = False
+    extra_pedestrians: tuple[Pedestrian, ...] = ()  # more pedestrians, in addition to the primary one
 
     @property
     def side(self) -> float:
@@ -75,6 +96,12 @@ class ScenarioParams:
         return self.side * abs(PED_START_Y)
 
     @property
+    def pedestrians(self) -> tuple[Pedestrian, ...]:
+        """Every pedestrian in the scenario: the primary one (if present) first, then the extras."""
+        primary = Pedestrian(self.ped_x, self.ped_speed, self.ped_trigger_distance, self.ped_from_left)
+        return ((primary,) if self.ped_present else ()) + self.extra_pedestrians
+
+    @property
     def vehicles(self) -> tuple[Vehicle, ...]:
         """The primary occluder first, then the extras."""
         return (Vehicle(self.occluder_x, self.occluder_y, self.occluder_length), *self.extra_vehicles)
@@ -88,10 +115,9 @@ class ScenarioParams:
         return max(v.far_x for v in self.vehicles)
 
     def __post_init__(self) -> None:
-        # The pedestrian walks straight across; its path must not run through any parked vehicle.
-        if not self.ped_present:
-            return
-        for v in self.vehicles:
-            if v.near_x - PED_RADIUS < self.ped_x < v.far_x + PED_RADIUS:
-                raise ValueError(f"ped_x={self.ped_x} puts the pedestrian's path through a parked vehicle "
-                                 f"(x {v.near_x:.2f} to {v.far_x:.2f})")
+        # A pedestrian walks straight across; its path must not run through any parked vehicle.
+        for i, ped in enumerate(self.pedestrians):
+            for v in self.vehicles:
+                if v.near_x - PED_RADIUS < ped.x < v.far_x + PED_RADIUS:
+                    raise ValueError(f"ped_x={ped.x} puts pedestrian {i}'s path through a parked vehicle "
+                                     f"(x {v.near_x:.2f} to {v.far_x:.2f})")

@@ -30,12 +30,16 @@ class EpisodeRecord:
     ego_length: float
     ego_width: float
     ego_wheelbase: float
-    ped: np.ndarray  # (N, 2) pedestrian centre, NaN rows when there is no pedestrian
+    ped: np.ndarray  # (N, P, 2) centre of each of P pedestrians; (N, 2) is accepted for one. NaN when absent
     ped_radius: float
     occluder_near_x: float  # x of the occluder's near end
     occluder_far_x: float
     outcome: Outcome
     params: dict[str, ParamValue] = field(default_factory=dict)  # scenario parameters, copied into the CSV
+
+    def __post_init__(self) -> None:
+        if self.ped.ndim == 2:  # a single pedestrian track
+            self.ped = self.ped[:, None, :]
 
     @property
     def ped_present(self) -> bool:

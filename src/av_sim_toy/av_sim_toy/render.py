@@ -1,7 +1,7 @@
 """Matplotlib renderer: episode log -> MP4 (or a single frame).
 
 Top-down, camera follows the ego. Shows the road, the parked occluder, the occluded (shadow)
-region, ego, the pedestrian (solid when visible, dashed outline when hidden) and the planner's
+region, ego, each pedestrian (solid when visible, dashed outline when hidden) and the planner's
 target speed with its reason.
 """
 
@@ -34,7 +34,7 @@ COLORS = dict(road="#d9d9d9", parking="#bdbdbd", walk="#eeeeee", ego="#1f77b4", 
 class _Frames:
     t: np.ndarray
     ego: np.ndarray
-    ped: np.ndarray
+    ped: np.ndarray  # (K, P, 2)
     target: np.ndarray
     reason: list[str]
 
@@ -44,7 +44,7 @@ def _frames(ep: Episode) -> _Frames:
     return _Frames(
         t=np.append(ep.t, ep.t[-1] + ep.dt),
         ego=np.vstack([ep.ego, ep.final_ego]),
-        ped=np.vstack([ep.ped, ep.final_ped]),
+        ped=np.concatenate([ep.peds, ep.final_peds[None]], axis=0),
         target=np.append(ep.target_speed, ep.target_speed[-1]),
         reason=ep.reason + [ep.reason[-1]],
     )
@@ -71,8 +71,8 @@ class _Scene:
             ax.add_patch(Polygon(rect, fc=COLORS["occluder"], ec=COLORS["edge"], zorder=4))
         self.shadows = [Polygon(np.zeros((3, 2)), fc=COLORS["shadow"], alpha=0.3, ec="none", zorder=3) for _ in self.rects]
         self.ego = Polygon(np.zeros((4, 2)), fc=COLORS["ego"], ec=COLORS["edge"], zorder=5)
-        self.ped = Circle((0, 0), sc.PED_RADIUS, zorder=6)
-        for patch in (*self.shadows, self.ego, self.ped):
+        self.peds = [Circle((0, 0), sc.PED_RADIUS, zorder=6) for _ in range(self.f.ped.shape[1])]
+        for patch in (*self.shadows, self.ego, *self.peds):
             ax.add_patch(patch)
         self.text = ax.text(0.01, 0.97, "", transform=ax.transAxes, va="top", family="monospace", fontsize=10,
                             bbox=dict(fc="white", ec="none", alpha=0.8), zorder=10)
@@ -92,12 +92,12 @@ class _Scene:
             patch.set_visible(shadow is not None)
             if shadow is not None:
                 patch.set_xy(shadow)
-        pxy = f.ped[k]
-        self.ped.set_visible(not np.isnan(pxy[0]))
-        if not np.isnan(pxy[0]):
-            seen = all(is_visible(front, pxy, rect, SENSOR_RANGE) for rect in self.rects)
-            self.ped.center = (float(pxy[0]), float(pxy[1]))
-            self.ped.set(fc=COLORS["ped"] if seen else "none", ec=COLORS["ped"], ls="-" if seen else "--", lw=1.5)
+        for patch, pxy in zip(self.peds, f.ped[k]):
+            patch.set_visible(not np.isnan(pxy[0]))
+            if not np.isnan(pxy[0]):
+                seen = all(is_visible(front, pxy, rect, SENSOR_RANGE) for rect in self.rects)
+                patch.center = (float(pxy[0]), float(pxy[1]))
+                patch.set(fc=COLORS["ped"] if seen else "none", ec=COLORS["ped"], ls="-" if seen else "--", lw=1.5)
         self.ax.set_xlim(front[0] - VIEW_BEHIND, front[0] + VIEW_AHEAD)
         last = k == len(f.t) - 1
         label = f"t={f.t[k]:5.2f}s  v={v:5.2f} m/s  target={f.target[k]:5.2f} m/s ({f.reason[k]})"

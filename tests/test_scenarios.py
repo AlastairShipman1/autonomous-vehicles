@@ -1,5 +1,9 @@
+import dataclasses
+
 import numpy as np
 import pytest
+
+from av_core.control import Controller
 
 from av_core.plan import RuleBasedPlanner, RuleBasedPlannerV1
 from av_core.predict import ConstantVelocityPredictor
@@ -113,3 +117,113 @@ def test_scenario_tool_writes_a_video(tmp_path):
         pytest.skip("needs ffmpeg")
     render_scenario.main(["slow_ped", "--planner", "v0", "--out", str(tmp_path), "--stride", "10"])
     assert (tmp_path / "slow_ped__v0.mp4").stat().st_size > 1000
+
+
+# --- several pedestrians -----------------------------------------------------------------------
+
+from av_sim_toy import Pedestrian  # noqa: E402
+from av_core.sweep import compute_metrics  # noqa: E402
+from av_core.types import AgentClass  # noqa: E402
+
+
+def two_peds(**kw):
+    base = dict(initial_speed=11.0, occluder_x=46.0, occluder_length=4.5, extra_vehicles=(Vehicle(53.0),), ped_x=49.5,
+                ped_trigger_distance=29.0, extra_pedestrians=(Pedestrian(49.5, speed=1.2, trigger_distance=24.0),))
+    return ScenarioParams(**{**base, **kw})
+
+
+def test_params_list_every_pedestrian_primary_first():
+    p = two_peds()
+    assert [q.trigger_distance for q in p.pedestrians] == [29.0, 24.0]
+    assert two_peds(ped_present=False).pedestrians == (Pedestrian(49.5, speed=1.2, trigger_distance=24.0),)
+    assert ScenarioParams(ped_present=False).pedestrians == ()
+    assert Pedestrian(1.0, from_left=True).y0 == 4.5 and Pedestrian(1.0).side == -1.0
+
+
+def test_extra_pedestrians_are_validated_against_every_vehicle():
+    with pytest.raises(ValueError, match="pedestrian 1"):
+        two_peds(extra_pedestrians=(Pedestrian(46.0),))  # inside the first car
+    with pytest.raises(ValueError, match="pedestrian 1"):
+        two_peds(extra_vehicles=(Vehicle(53.0), Vehicle(60.0, 2.75)), extra_pedestrians=(Pedestrian(60.0, from_left=True),))
+
+
+def test_each_pedestrian_triggers_walks_and_appears_independently():
+    sim = ToySim(two_peds())
+    assert sim.n_peds == 2 and [sim.ped_id(i) for i in range(2)] == [2, 21]
+    seen_first_trigger = []
+    ctl = Controller()
+    while not sim.done and sim.ego_front()[0] < 50.0:
+        w = sim.world_model()
+        sim.step(ctl.step(w.stamp, w.ego, sim.route, 11.0, sim.dt), ctl.max_steer_angle)
+        seen_first_trigger.append(tuple(t is not None for t in sim.ped_trigger_steps))
+    assert (True, False) in seen_first_trigger and (True, True) in seen_first_trigger  # first goes before the second
+    assert sim.ped_trigger_steps[0] < sim.ped_trigger_steps[1]
+
+
+def test_visible_pedestrians_are_agents_with_their_own_ids():
+    sim = ToySim(two_peds())
+    sim.state = sim.state.__class__(45.7, 0.0, 0.0, 5.0)  # front-centre straight on to the gap: both in view
+    peds = [a for a in sim.world_model().agents if a.cls is AgentClass.PEDESTRIAN]
+    assert sorted(a.id for a in peds) == [2, 21] and sim.peds_visible().all()
+
+
+def test_collision_with_either_pedestrian_ends_the_episode():
+    only_second = two_peds(ped_present=False, extra_pedestrians=(Pedestrian(49.5, speed=1.6, trigger_distance=28.0),))
+    ep = run_episode(only_second, RuleBasedPlanner())
+    assert ep.outcome == "collision" and ep.peds.shape[1] == 1
+    assert run_episode(two_peds(), RuleBasedPlanner()).outcome == "collision"
+
+
+def test_episode_log_has_one_track_per_pedestrian_and_the_primary_view_is_unchanged():
+    ep = run_episode(two_peds(), RuleBasedPlannerV1(), predictor=ConstantVelocityPredictor())
+    assert ep.peds.shape == (len(ep.t), 2, 2) and ep.peds_visible.shape == (len(ep.t), 2) and ep.final_peds.shape == (2, 2)
+    assert np.array_equal(ep.ped, ep.peds[:, 0]) and np.array_equal(ep.ped_visible, ep.peds_visible[:, 0])
+    assert ep.peds[0, 0, 0] == ep.peds[0, 1, 0] == 49.5  # both wait at the gap
+    none = run_episode(ScenarioParams(ped_present=False), RuleBasedPlanner())
+    assert none.peds.shape == (len(none.t), 1, 2) and np.isnan(none.peds).all()
+
+
+def test_metrics_take_the_minimum_over_pedestrians():
+    rec = to_record(run_episode(two_peds(), RuleBasedPlannerV1(), predictor=ConstantVelocityPredictor()))
+    both = compute_metrics(rec)
+    singles = [compute_metrics(dataclasses.replace(rec, ped=rec.ped[:, k:k + 1])) for k in range(2)]
+    assert both.min_distance == pytest.approx(min(m.min_distance for m in singles))
+    assert both.min_ttc == min(m.min_ttc for m in singles)
+    assert rec.params["n_pedestrians"] == 2
+
+
+def test_collision_metric_sees_a_hit_on_the_second_pedestrian():
+    ep = run_episode(two_peds(ped_present=False, extra_pedestrians=(Pedestrian(49.5, speed=1.6, trigger_distance=28.0),)),
+                     RuleBasedPlanner())
+    m = compute_metrics(to_record(ep))
+    assert m.collision is True and m.min_ttc == 0.0 and m.min_distance <= 0.3
+    assert compute_metrics(to_record(run_episode(ScenarioParams(ped_present=False), RuleBasedPlanner()))).collision is None
+
+
+def test_record_accepts_a_single_track_for_backwards_compatibility():
+    rec = to_record(run_episode(SCENARIOS["slow_ped"].params, RuleBasedPlanner()))
+    assert rec.ped.ndim == 3 and rec.ped.shape[1] == 1
+    old_style = dataclasses.replace(rec, ped=rec.ped[:, 0])  # (N, 2), as before this PR
+    assert old_style.ped.shape == rec.ped.shape and compute_metrics(old_style) == compute_metrics(rec)
+
+
+def test_multi_pedestrian_scenarios_collide_for_v0_and_not_for_v1():
+    for name in ("two_peds_one_gap", "second_pedestrian_follows", "group_of_children", "peds_both_sides", "row_two_gaps"):
+        params = SCENARIOS[name].params
+        assert len(params.pedestrians) >= 2, name
+        assert run_episode(params, RuleBasedPlanner()).outcome == "collision", name
+        assert run_episode(params, RuleBasedPlannerV1(), predictor=ConstantVelocityPredictor()).outcome == "finished", name
+
+
+def test_rendering_a_frame_with_several_pedestrians_draws_each():
+    import matplotlib.pyplot as plt
+
+    from av_sim_toy import render_frame
+
+    ep = run_episode(two_peds(), RuleBasedPlannerV1(), predictor=ConstantVelocityPredictor())
+    fig = render_frame(ep, len(ep.t) // 2)
+    try:
+        circles = [p for p in fig.axes[0].patches if p.__class__.__name__ == "Circle"]
+        assert len(circles) == 2
+    finally:
+        plt.close(fig)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from av_sim_toy.scenario import ScenarioParams, Vehicle
+from av_sim_toy.scenario import Pedestrian, ScenarioParams, Vehicle
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,32 @@ _LIST: list[NamedScenario] = [
     NamedScenario(
         "truck_no_pedestrian", "The 12 m truck with nobody there.",
         ScenarioParams(initial_speed=11.0, occluder_x=50.0, occluder_length=12.0, ped_present=False)),
+    NamedScenario(
+        "two_peds_one_gap", "Two pedestrians step out of the same 2.5 m gap, the second a moment after the first.",
+        ScenarioParams(initial_speed=11.0, occluder_x=46.0, occluder_length=4.5, extra_vehicles=(Vehicle(53.0),),
+                       ped_x=49.5, ped_trigger_distance=29.0,
+                       extra_pedestrians=(Pedestrian(49.5, speed=1.2, trigger_distance=24.0),))),
+    NamedScenario(
+        "second_pedestrian_follows", "One pedestrian crosses early and is gone before the ego arrives; a second follows from the "
+        "same spot later. The trap for a planner that resumes as soon as the first clears.",
+        ScenarioParams(initial_speed=11.0, ped_x=54.0, ped_speed=1.6, ped_trigger_distance=36.0,
+                       extra_pedestrians=(Pedestrian(54.0, speed=1.6, trigger_distance=24.0),))),
+    NamedScenario(
+        "group_of_children", "Three children (1.1 to 1.6 m/s) step out one after another along the far end of the car.",
+        ScenarioParams(initial_speed=11.0, ped_x=54.0, ped_speed=1.6, ped_trigger_distance=29.0,
+                       extra_pedestrians=(Pedestrian(54.9, speed=1.3, trigger_distance=27.0),
+                                          Pedestrian(55.8, speed=1.1, trigger_distance=25.0)))),
+    NamedScenario(
+        "peds_both_sides", "A pedestrian from behind the right-hand car and another from behind a car on the left, "
+        "at different places along the road.",
+        ScenarioParams(initial_speed=11.0, occluder_x=52.0, occluder_length=4.5, ped_x=55.0, ped_trigger_distance=29.0,
+                       extra_vehicles=(Vehicle(44.0, 2.75),),
+                       extra_pedestrians=(Pedestrian(47.4, speed=1.4, trigger_distance=27.0, from_left=True),))),
+    NamedScenario(
+        "row_two_gaps", "A row of three cars with a 3 m gap between each pair and a pedestrian in each gap.",
+        ScenarioParams(initial_speed=11.0, occluder_x=42.0, occluder_length=4.5, extra_vehicles=(Vehicle(49.5), Vehicle(57.0)),
+                       ped_x=45.75, ped_trigger_distance=29.0,
+                       extra_pedestrians=(Pedestrian(53.25, speed=1.4, trigger_distance=28.0),))),
 ]
 
 SCENARIOS: dict[str, NamedScenario] = {s.name: s for s in _LIST}

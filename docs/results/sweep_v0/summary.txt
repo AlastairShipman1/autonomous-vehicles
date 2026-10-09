@@ -1,4 +1,4 @@
-planner v0, seeds reporting (200 episodes, 2 s)
+planner v0, seeds reporting (200 episodes, 3 s)
 
 pedestrian present (n = 96)
   collision_rate       24.0%  (95% CI 16.5% to 33.4%)

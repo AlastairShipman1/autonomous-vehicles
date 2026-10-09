@@ -21,7 +21,7 @@ the spec words it, had the pedestrian walking through the car; it gave v1 a 33% 
 | Metric | v0 | v1 |
 | --- | --- | --- |
 | Collision rate | 24.0% (16.5 to 33.4) | 0.0% (0.0 to 3.8) |
-| Min distance, ped centre to ego rectangle (m) | 0.94 (0.81 to 1.08) | 3.15 (2.95 to 3.33) |
+| Min distance, ped centre to ego rectangle (m) | 0.94 (0.81 to 1.08) | 2.96 (2.80 to 3.10) |
 | Episodes with a finite min TTC | 25.0% (17.4 to 34.5) | 100.0% (96.2 to 100.0) |
 | Min TTC where finite (s) | 0.08 (0.00 to 0.23) [24] | 1.33 (1.29 to 1.38) [96] |
 | Braking onset, ego front to occluder near end (m) | -3.48 (-5.34 to -1.63) [17] | 20.29 (19.85 to 20.74) [96] |
@@ -34,6 +34,10 @@ the spec words it, had the pedestrian walking through the car; it gave v1 a 33% 
 | Needless stop rate (speed < 1 m/s) | 0.0% (0.0 to 3.6) | 0.0% (0.0 to 3.6) |
 | Braking onset (m) | undefined (never brakes above 1 m/s²) | 19.92 (19.58 to 20.26) [104] |
 | Time penalty (s) | -2.03 (-2.23 to -1.84) [104] | 1.18 (0.98 to 1.36) [104] |
+
+*Update:* the pedestrian now stops on the far sidewalk instead of walking on indefinitely (#16), so a pedestrian the ego
+never meets ends 3.55 m from the lane edge rather than ever farther away; v1's minimum distance (earlier 3.15 m) is
+re-measured above. Nothing else in this table changed.
 
 ## Reading the numbers
 
