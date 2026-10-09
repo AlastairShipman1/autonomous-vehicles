@@ -12,16 +12,20 @@ Per-episode rows are in `sweep_v0/episodes.csv` and `sweep_v1/episodes.csv`; ful
 Rates are Wilson 95% intervals; the other metrics are bootstrap 95% intervals of the mean over the episodes where the
 metric is defined (count in brackets). Metric definitions: see PR 2.7.
 
+**Scenario geometry.** The pedestrian steps out just past the occluder's far end (0.5 to 1.5 m beyond it), so its walk no
+longer crosses the parked car. An earlier version of this table, with the pedestrian's x sampled over the car's span as
+the spec words it, had the pedestrian walking through the car; it gave v1 a 33% collision rate and is superseded.
+
 ## Pedestrian present (96 episodes)
 
 | Metric | v0 | v1 |
 | --- | --- | --- |
-| Collision rate | 24.0% (16.5 to 33.4) | 33.3% (24.7 to 43.2) |
-| Min distance, ped centre to ego rectangle (m) | 0.95 (0.82 to 1.09) | 1.89 (1.61 to 2.18) |
-| Episodes with a finite min TTC | 26.0% (18.3 to 35.6) | 97.9% (92.7 to 99.4) |
-| Min TTC where finite (s) | 0.18 (0.00 to 0.46) [25] | 0.71 (0.58 to 0.83) [94] |
-| Braking onset, ego front to occluder near end (m) | 0.91 (-1.39 to 3.28) [17] | 21.93 (21.14 to 22.75) [96] |
-| Time penalty (s) | -1.97 (-2.18 to -1.76) [73] | 3.90 (3.57 to 4.22) [64] |
+| Collision rate | 24.0% (16.5 to 33.4) | 0.0% (0.0 to 3.8) |
+| Min distance, ped centre to ego rectangle (m) | 0.94 (0.81 to 1.08) | 3.15 (2.95 to 3.33) |
+| Episodes with a finite min TTC | 25.0% (17.4 to 34.5) | 100.0% (96.2 to 100.0) |
+| Min TTC where finite (s) | 0.08 (0.00 to 0.23) [24] | 1.33 (1.29 to 1.38) [96] |
+| Braking onset, ego front to occluder near end (m) | -3.48 (-5.34 to -1.63) [17] | 20.29 (19.85 to 20.74) [96] |
+| Time penalty (s) | -1.97 (-2.18 to -1.76) [73] | 4.13 (3.84 to 4.42) [96] |
 
 ## Pedestrian absent (104 episodes)
 
@@ -33,35 +37,26 @@ metric is defined (count in brackets). Metric definitions: see PR 2.7.
 
 ## Reading the numbers
 
-- **v1 collides more often than v0 (33% against 24%)**, though the intervals overlap. It brakes about 20 m before the
-  occluder and slows by about 1 to 4 s overall, but that does not buy safety here. This is a finding about the untuned
-  baseline, not a bug I could find. In the 8 v1 collisions I looked at, the ego was slow at impact (0.4 to 4 m/s: at
-  the 4 m/s occlusion floor, or after braking for a pedestrian already in the lane). One plausible mechanism is that
-  the pedestrian's walk is triggered by the ego's distance, so a slower ego gives it more time to reach the lane,
-  while the fast v0 ego often passes first. I did not test that, nor check where the ego was relative to the car at
-  impact.
-- **Time penalty excludes collisions** (the finish is never reached), so v1's 64 defined episodes are the ones that
-  avoided a collision; compare with the collision rate before reading it as a cost.
+- **v0 is blind to the hidden pedestrian and v1 is not.** v0 collides in 23 of 96 pedestrian episodes (24%); v1 in none,
+  at a cost in time. v1 starts braking about 20 m before the occluder in every episode, pedestrian or not (its occlusion
+  cap), and takes 1.2 s longer than constant speed without a pedestrian and 4.1 s longer with one.
+- **That cost is what an AIF planner has to beat.** The two baselines bracket the trade-off: v0 is fast and unsafe, v1
+  safe and slow. The package-gate test (fewer collisions at equal or lower over-caution, or equal collisions with clearly
+  less over-caution) is against v1's 0 collisions, so the target is about the time penalty.
+- **v1's time penalty is comparable across the two splits only loosely**: the with-pedestrian figure includes episodes
+  where v1 stops for the pedestrian and waits. v0's negative penalty is it accelerating toward 13.9 m/s from slower
+  starts. v0's penalty excludes its 23 collisions (the finish is never reached); v1 has none to exclude.
 - **There was no needless stop.** Neither planner dropped below 1 m/s without a pedestrian (0 of 104, upper bound 3.6%),
-  so there is no needless-stop clip. The clip below is the closest thing: the pedestrian-absent episode with the largest
+  so there is no needless-stop clip. The second clip is the closest thing: the pedestrian-absent episode with the largest
   time penalty.
-- Only about a quarter of v0's pedestrian episodes have a finite min TTC, since constant-velocity extrapolation rarely
-  predicts an overlap until the pedestrian is in the lane. The v1 figure is high because it spends so long near the
-  pedestrian's path.
-
-## Caveat that affects every number above: where the pedestrian appears
-
-The spec samples the pedestrian's x within the occluder span +/- 1 m, and the pedestrian walks straight in +y from
-y = -4.5. For most seeds that path crosses the parked car's footprint, so the pedestrian emerges from the car's top
-edge at y = -1.75, only about 0.8 m (about 0.6 s at 1.4 m/s) from the ego's body. Most collisions are therefore
-essentially unavoidable by sight for any planner that does not slow to a crawl well beforehand. The rates above are
-only meaningful relative to one another, and if the sampler changes (PR 2.1 and 2.3 raised this) they will move a lot.
+- Only a quarter of v0's pedestrian episodes have a finite min TTC, since constant-velocity extrapolation rarely
+  predicts an overlap until the pedestrian is in the lane.
 
 ## Clips (planner v1, `docs/results/clips/`)
 
 | Clip | Seed | What it shows |
 | --- | --- | --- |
-| `near_miss_seed10195_v1.mp4` | 10195 | Pedestrian present, no collision, smallest centre distance of any non-collision episode: 0.34 m (0.04 m clearance from the 0.3 m disc). Min TTC is infinite: constant velocity never predicts the overlap. |
+| `near_miss_seed10097_v1.mp4` | 10097 | Pedestrian present, no collision, smallest centre distance of any non-collision episode: 0.67 m (0.37 m clearance from the 0.3 m disc). The ego comes to a full stop and the pedestrian passes beside it, so this is a close pass rather than a braking failure. |
 | `slowdown_no_ped_seed10145_v1.mp4` | 10145 | No pedestrian; the largest time penalty (2.98 s). Ego slows from 13.0 m/s to 3.8 m/s along the 10 m occluder (the 4 m/s floor), then resumes. Not a stop, but the nearest needless-caution case. |
 
 Re-render either with `uv run python -m tools.render_seed <seed> --planner v1`.

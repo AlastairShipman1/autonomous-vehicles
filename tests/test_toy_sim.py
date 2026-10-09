@@ -39,20 +39,32 @@ def test_initial_world_model():
     assert w.traffic_lights == ()
 
 
-def test_pedestrian_only_in_world_while_visible():
-    # ego far back: pedestrian behind the occluder's far end is hidden once ego is close enough
-    p = ScenarioParams(ped_x=50.0, ped_trigger_distance=0.0, occluder_length=10.0)
-    sim = ToySim(p)
-    seen = []
-    ctl = Controller()
-    while not sim.done and sim.ego_front()[0] < 49:
+def visibility_transitions(params, speed=8.0):
+    """(ego front x, visible) at each change of visibility while the ego approaches the pedestrian's x."""
+    sim, ctl, prev, out = ToySim(params), Controller(), None, []
+    while not sim.done and sim.ego_front()[0] < params.ped_x:
         w = sim.world_model()
-        assert any(a.id == 2 for a in w.agents) == sim.ped_visible()
-        seen.append(sim.ped_visible())
-        sim.step(ctl.step(w.stamp, w.ego, sim.route, 8.0, sim.dt), ctl.max_steer_angle)
-    # seen from afar (shallow angle clears the car), then hidden once ego is close, and stays hidden
-    assert seen[0] is True and seen[-1] is False
-    assert seen == sorted(seen, reverse=True)
+        assert any(a.id == 2 for a in w.agents) == sim.ped_visible()  # in the WorldModel only while visible
+        if sim.ped_visible() != prev:
+            prev = sim.ped_visible()
+            out.append((float(sim.ego_front()[0]), prev))
+        sim.step(ctl.step(w.stamp, w.ego, sim.route, speed, sim.dt), ctl.max_steer_angle)
+    return out
+
+
+def test_short_occluder_parallax_visible_hidden_visible():
+    # 4.5 m car (47.75 to 52.25), pedestrian 0.5 m past its far end: seen from afar, hidden while the car is in
+    # the way, seen again only as the ego's front draws level with the far end
+    (x0, v0), (x1, v1), (x2, v2) = visibility_transitions(
+        ScenarioParams(occluder_length=4.5, ped_x=52.75, ped_trigger_distance=0.0))
+    assert (v0, v1, v2) == (True, False, True)
+    assert 15.0 < x1 < 30.0 and 50.0 < x2 < 53.0
+
+
+def test_long_occluder_hides_the_pedestrian_until_the_ego_is_almost_alongside():
+    transitions = visibility_transitions(ScenarioParams(occluder_length=10.0, ped_x=56.5, ped_trigger_distance=0.0))
+    assert transitions[0][1] is False and transitions[-1][1] is True
+    assert transitions[-1][0] > 53.0  # revealed with the far end (x = 55) almost level with the bumper
 
 
 def test_no_pedestrian_never_collides_and_finishes():
@@ -63,7 +75,7 @@ def test_no_pedestrian_never_collides_and_finishes():
 
 
 def test_collision_when_pedestrian_steps_out_in_front():
-    p = ScenarioParams(initial_speed=13.0, ped_x=50.0, ped_speed=1.5, ped_trigger_distance=35.0, occluder_length=10.0)
+    p = ScenarioParams(initial_speed=13.0, ped_x=56.0, ped_speed=1.5, ped_trigger_distance=35.0, occluder_length=10.0)
     ep = run_episode(p, PLANNER)
     assert ep.outcome == "collision"
     assert ep.t[-1] < 10.0
@@ -71,7 +83,7 @@ def test_collision_when_pedestrian_steps_out_in_front():
 
 def test_no_collision_when_pedestrian_clears_the_lane_late():
     # ego passes the crossing before the pedestrian reaches the lane edge
-    p = ScenarioParams(initial_speed=13.0, ped_x=50.0, ped_speed=0.8, ped_trigger_distance=10.0)
+    p = ScenarioParams(initial_speed=13.0, ped_x=54.0, ped_speed=0.8, ped_trigger_distance=10.0)
     assert run_episode(p, PLANNER).outcome == "finished"
 
 

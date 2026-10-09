@@ -30,6 +30,15 @@ def test_reproducible_across_fresh_interpreter_state():
     assert sample_scenario(7) == a
 
 
+def test_pedestrian_path_never_crosses_the_occluder():
+    from av_sim_toy import ScenarioParams
+
+    with pytest.raises(ValueError, match="through the occluder"):
+        ScenarioParams(occluder_x=50.0, occluder_length=6.0, ped_x=52.0)
+    ScenarioParams(occluder_x=50.0, occluder_length=6.0, ped_x=53.4)  # clears the car and the 0.3 m radius
+    ScenarioParams(occluder_x=50.0, occluder_length=6.0, ped_x=52.0, ped_present=False)  # no pedestrian, no path
+
+
 def test_pinned_values_for_seed_0():
     # guards against accidental changes to draw order or distributions
     p = sample_scenario(0)
@@ -45,8 +54,8 @@ def test_ranges_match_spec():
         assert p.occluder_length in OCCLUDER_LENGTHS
         assert 0.8 <= p.ped_speed <= 2.0
         assert 10.0 <= p.ped_trigger_distance <= 35.0
-        half = 0.5 * p.occluder_length + 1.0
-        assert p.occluder_x - half <= p.ped_x <= p.occluder_x + half
+        far_end = p.occluder_x + 0.5 * p.occluder_length
+        assert far_end + 0.5 <= p.ped_x <= far_end + 1.5  # steps out past the far end, never through the car
 
 
 def test_distributions_are_sensible():

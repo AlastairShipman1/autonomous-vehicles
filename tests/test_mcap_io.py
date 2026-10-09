@@ -36,7 +36,7 @@ def logged_run(params, steps=120):
 
 @pytest.fixture
 def bag(tmp_path):
-    params = ScenarioParams(initial_speed=12.0, occluder_length=10.0, ped_x=50.0, ped_trigger_distance=25.0)
+    params = ScenarioParams(initial_speed=12.0, occluder_length=10.0, ped_x=56.0, ped_trigger_distance=25.0)
     worlds, cmds, route = logged_run(params)
     return write_bag(tmp_path / "run.mcap", worlds, cmds, route), worlds, cmds, route
 
