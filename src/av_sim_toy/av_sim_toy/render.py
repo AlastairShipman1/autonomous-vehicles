@@ -16,6 +16,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.axes import Axes  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.animation import FFMpegWriter, FuncAnimation  # noqa: E402
 from matplotlib.patches import Circle, Polygon, Rectangle  # noqa: E402
@@ -53,28 +54,37 @@ def _frames(ep: Episode) -> _Frames:
     )
 
 
+def draw_background(ax: Axes, params: sc.ScenarioParams, y_lim: tuple[float, float] = Y_LIM) -> list[np.ndarray]:
+    """Road, parking lanes, sidewalks, an oncoming lane if there is one, and the parked vehicles.
+
+    Returns the parked vehicles' rectangles (the primary occluder first), for visibility and shadows.
+    """
+    ax.set_aspect("equal")
+    ax.set_ylim(*y_lim)
+    x0, x1 = -30.0, 300.0
+    ax.add_patch(Rectangle((x0, -sc.LANE_WIDTH / 2), x1 - x0, sc.LANE_WIDTH, fc=COLORS["road"], lw=0))
+    for sign in (-1.0, 1.0):  # parking lane and sidewalk on each side
+        ax.add_patch(Rectangle((x0, sign * sc.LANE_WIDTH / 2), x1 - x0, sign * (abs(sc.SIDEWALK_Y) - sc.LANE_WIDTH / 2),
+                               fc=COLORS["parking"], lw=0))
+        ax.add_patch(Rectangle((x0, sign * abs(sc.SIDEWALK_Y)), x1 - x0, sign * (abs(y_lim[0]) - abs(sc.SIDEWALK_Y)),
+                               fc=COLORS["walk"], lw=0))
+    if any(mv.y > sc.LANE_WIDTH / 2 for mv in params.moving_vehicles):  # an oncoming lane: draw it as road
+        ax.add_patch(Rectangle((x0, sc.LANE_WIDTH / 2), x1 - x0, sc.LANE_WIDTH, fc=COLORS["road"], lw=0, zorder=1.5))
+        ax.axhline(sc.LANE_WIDTH / 2, color="#f2c400", lw=1.5, zorder=1.6)
+    ax.axhline(0.0, color="white", ls=(0, (6, 6)), lw=1)
+    rects = [rect_corners(v.x, v.y, 0.0, v.length, v.width) for v in params.vehicles]
+    for rect in rects:
+        ax.add_patch(Polygon(rect, fc=COLORS["occluder"], ec=COLORS["edge"], zorder=4))
+    return rects
+
+
 class _Scene:
     def __init__(self, ep: Episode, title: str = ""):
         self.ep, self.f = ep, _frames(ep)
         p = ep.params
-        self.rects = [rect_corners(v.x, v.y, 0.0, v.length, v.width) for v in p.vehicles]
         self.fig, self.ax = plt.subplots(figsize=(12, 4.2), dpi=100)
         ax = self.ax
-        ax.set_aspect("equal")
-        ax.set_ylim(*Y_LIM)
-        x0, x1 = -30.0, 300.0
-        ax.add_patch(Rectangle((x0, -sc.LANE_WIDTH / 2), x1 - x0, sc.LANE_WIDTH, fc=COLORS["road"], lw=0))
-        for sign in (-1.0, 1.0):  # parking lane and sidewalk on each side
-            ax.add_patch(Rectangle((x0, sign * sc.LANE_WIDTH / 2), x1 - x0, sign * (abs(sc.SIDEWALK_Y) - sc.LANE_WIDTH / 2),
-                                   fc=COLORS["parking"], lw=0))
-            ax.add_patch(Rectangle((x0, sign * abs(sc.SIDEWALK_Y)), x1 - x0, sign * (abs(Y_LIM[0]) - abs(sc.SIDEWALK_Y)),
-                                   fc=COLORS["walk"], lw=0))
-        if any(mv.y > sc.LANE_WIDTH / 2 for mv in p.moving_vehicles):  # an oncoming lane: draw it as road
-            ax.add_patch(Rectangle((x0, sc.LANE_WIDTH / 2), x1 - x0, sc.LANE_WIDTH, fc=COLORS["road"], lw=0, zorder=1.5))
-            ax.axhline(sc.LANE_WIDTH / 2, color="#f2c400", lw=1.5, zorder=1.6)
-        ax.axhline(0.0, color="white", ls=(0, (6, 6)), lw=1)
-        for rect in self.rects:
-            ax.add_patch(Polygon(rect, fc=COLORS["occluder"], ec=COLORS["edge"], zorder=4))
+        self.rects = draw_background(ax, p)
         self.moving = [Polygon(np.zeros((4, 2)), fc=COLORS["moving"], ec=COLORS["edge"], zorder=4) for _ in p.moving_vehicles]
         for patch in self.moving:
             ax.add_patch(patch)

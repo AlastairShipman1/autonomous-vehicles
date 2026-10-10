@@ -1,13 +1,20 @@
 # Hand-built scenarios
 
-Twenty-two fixed scenarios for watching a planner on harder streets than the seeded single-car one. Each has one video per
-planner in `docs/results/scenarios/<scenario>__<planner>.mp4` (v0, v1, aif). Regenerate with:
+Twenty-two fixed scenarios for watching a planner on harder streets than the seeded single-car one. Each has **one video
+with every planner overlaid**, `docs/results/scenarios/<scenario>__overlay.mp4`: one road, one coloured ego per planner
+(v0 orange, v1 blue, aif green, nested outlines so planners that behave identically are still told apart), each planner's own
+pedestrians in its colour (solid when that ego can see them, dashed when it cannot), v1's occluded regions shaded, and a speed
+trace underneath (solid: speed, dashed: commanded target) with a cursor. A run that ends (a collision, or the finish) holds its
+last frame and is labelled. Regenerate with:
 
 ```sh
 uv run python -m tools.render_scenario --list
-uv run python -m tools.render_scenario --all --planner v0 v1 aif --out docs/results/scenarios
-uv run python -m tools.render_scenario row_of_cars --planner v1 aif     # just some
-uv run python -m tools.render_scenario --all --planner v0 v1 aif --no-video   # table only, 20 s
+uv run python -m tools.render_scenario --all --planner all --overlay --shadows v1 --out docs/results/scenarios
+uv run python -m tools.render_scenario row_of_cars --planner all --overlay            # just one
+uv run python -m tools.render_scenario row_of_cars --planner all --overlay --still 3.2   # a PNG of one moment
+uv run python -m tools.render_scenario row_of_cars --planner v1 aif                  # separate videos instead
+uv run python -m tools.render_scenario --all --planner all --no-video                # table only, 20 s
+uv run python -m tools.render_seed 10000 --planner all --overlay                     # any seed, overlaid
 ```
 
 These are single deterministic runs for looking at, **not statistics**: one run per cell says what happened here, not how

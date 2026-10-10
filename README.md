@@ -23,8 +23,10 @@ uv run pytest
 
 ```sh
 uv run python -m tools.render_seed 10000 --planner v1      # MP4 of one seed -> out/
+uv run python -m tools.render_seed 10000 --planner all --overlay   # every planner in one video
 uv run python -m tools.run_sweep --planner v1 --seeds reporting --n 200 --workers 4
-uv run python -m tools.render_scenario --list              # hand-built scenarios; videos in docs/results/scenarios
+uv run python -m tools.render_scenario --list              # hand-built scenarios; overlaid videos in docs/results/scenarios
+uv run python -m tools.render_scenario row_of_cars --planner all --overlay   # every planner in one video
 uv run python -m tools.mcap_io bag.mcap --planner v0       # replay a desktop bag through planner v0
 uv run python -m tools.run_sweep --planner aif --seeds tuning --n 100 --workers 4   # the AIF planner
 uv run pytest                                              # add -m slow for the 200-episode timing test
