@@ -32,4 +32,6 @@ uv run python -m tools.run_sweep --planner aif --seeds tuning --n 100 --workers 
 uv run pytest                                              # add -m slow for the 200-episode timing test
 ```
 
+Remote runs on the desktop (CARLA): `docs/desktop/DESKTOP_AGENT.md` is the runbook for the desktop Claude Code session.
+
 First sweep results: `docs/results/first_sweep.md`.
