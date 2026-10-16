@@ -84,7 +84,12 @@ class RuleBasedPlanner:
             if abs(lateral) > self.light_lateral_tol:  # controls another lane or street
                 continue
             gap = s_stop - s_front
-            if gap < 0.0 or speed**2 / (2.0 * self.b) > gap:  # already past it, or can no longer stop at b
+            if gap < 0.0:  # already past it
+                continue
+            # A yellow the ego can no longer stop for at b is driven through. A red (or unknown) never is: giving up
+            # at the last moment would send the ego through at speed, and speed tracking lag is enough to trip the
+            # "cannot stop" test just as the stopping profile starts to bind. Brake as hard as needed instead.
+            if light.state is TrafficLightState.YELLOW and speed**2 / (2.0 * self.b) > gap:
                 continue
             limit = min(limit, stopping_speed(gap, self.b, self.light_standoff))
         return limit

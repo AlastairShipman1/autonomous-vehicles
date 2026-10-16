@@ -121,6 +121,15 @@ def test_yellow_stops_only_if_ego_can():
     assert cannot.reason == "route" and cannot.target_speed == 13.9
 
 
+def test_red_is_never_driven_through_even_if_ego_cannot_stop_at_b():
+    """Only a yellow is released when the ego can no longer stop at b; a red keeps its stopping profile, so the
+    ego brakes as hard as it must instead of giving up at the last moment (found by the loop track: speed tracking
+    lag made a red release just as the profile started to bind, and the ego ran it at full speed)."""
+    cmd = PLANNER.plan(world(speed=13.0, x=14.0, lights=[light(RED, 30.0)]), STRAIGHT)  # needs 28 m, has 12
+    assert cmd.reason == "light"
+    assert cmd.target_speed == pytest.approx(math.sqrt(2 * 3 * (30 - 14 - 3.8 - 2)))
+
+
 def test_unknown_state_is_treated_like_red():
     unknown = PLANNER.plan(world(speed=5.0, lights=[light(UNKNOWN, 25.0)]), STRAIGHT)
     red = PLANNER.plan(world(speed=5.0, lights=[light(RED, 25.0)]), STRAIGHT)

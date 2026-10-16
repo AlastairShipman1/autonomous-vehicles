@@ -29,6 +29,8 @@ uv run python -m tools.render_scenario --list              # hand-built scenario
 uv run python -m tools.render_scenario row_of_cars --planner all --overlay   # every planner in one video
 uv run python -m tools.play row_of_cars --planner aif      # live window: walk a pedestrian with the arrow keys (SPACE starts)
 uv run python -m tools.play --replay out/play/FILE.json --planner all   # replay what you did against every planner
+uv run python -m tools.loop --planner v1                   # the loop: an endless track with a gauntlet; window (see docs/Loop track.md)
+uv run python -m tools.loop --headless --laps 5 --planner all      # lap tables per planner, no window
 uv run python -m tools.mcap_io bag.mcap --planner v0       # replay a desktop bag through planner v0
 uv run python -m tools.run_sweep --planner aif --seeds tuning --n 100 --workers 4   # the AIF planner
 uv run pytest                                              # add -m slow for the 200-episode timing test
