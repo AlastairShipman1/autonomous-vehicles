@@ -6,6 +6,8 @@ Deterministic: the same parameters and controller give a bit-identical trajector
 from __future__ import annotations
 
 import math
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -24,12 +26,14 @@ from av_core.protocols import Planner, Predictor
 from av_core.sweep.record import Outcome
 from av_core.types import Agent, AgentClass, ControlCommand, EgoState, OccludedRegion, PredictedTrajectory, Route, WorldModel
 from av_sim_toy import scenario as sc
+from av_sim_toy.manual import Direction, ManualPedestrian, STOPPED_EGO_SPEED
 from av_sim_toy.scenario import ScenarioParams
 
 OCCLUDER_ID, PED_ID = 1, 2
 EXTRA_ID_BASE = 10  # extra parked vehicles are agents 10, 11, ...
 EXTRA_PED_BASE = 20  # pedestrians after the primary one are agents 21, 22, ...
 MOVING_BASE = 30  # moving vehicles are agents 30, 31, ...
+MANUAL_PED_ID = 40  # the keyboard-driven pedestrian
 
 
 def make_route() -> Route:
@@ -37,7 +41,7 @@ def make_route() -> Route:
 
 
 class ToySim:
-    def __init__(self, params: ScenarioParams, dt: float = sc.DT):
+    def __init__(self, params: ScenarioParams, dt: float = sc.DT, manual_ped: ManualPedestrian | None = None):
         self.params, self.dt = params, dt
         self.route = make_route()
         self.state = BicycleState(0.0, 0.0, 0.0, params.initial_speed)
@@ -51,6 +55,10 @@ class ToySim:
         # (agent id, vehicle, rectangle) for the primary occluder and every extra vehicle
         self._vehicles = [(OCCLUDER_ID if i == 0 else EXTRA_ID_BASE + i - 1, v,
                            rect_corners(v.x, v.y, 0.0, v.length, v.width)) for i, v in enumerate(params.vehicles)]
+        # an optional pedestrian a person drives; it comes after the scripted ones (index ``len(params.pedestrians)``)
+        self.manual = manual_ped
+        if manual_ped is not None and manual_ped.blocked(manual_ped.x, manual_ped.y, self._parked_rects()):
+            raise ValueError(f"manual pedestrian starts inside a vehicle or outside the world: ({manual_ped.x}, {manual_ped.y})")
 
     # --- geometry -------------------------------------------------------------------------
 
@@ -79,7 +87,13 @@ class ToySim:
 
     @property
     def n_peds(self) -> int:
-        return len(self._peds)
+        return len(self._peds) + (self.manual is not None)
+
+    def _is_manual(self, i: int) -> bool:
+        return self.manual is not None and i == len(self._peds)
+
+    def _parked_rects(self) -> list[np.ndarray]:
+        return [rect for _, _, rect in self._vehicles]
 
     @property
     def ped_trigger_step(self) -> int | None:
@@ -90,9 +104,13 @@ class ToySim:
         self.ped_trigger_steps[0] = value
 
     def ped_id(self, i: int) -> int:
+        if self._is_manual(i):
+            return MANUAL_PED_ID
         return PED_ID if i == 0 and self.params.ped_present else EXTRA_PED_BASE + i
 
     def ped_xy_at(self, i: int) -> np.ndarray:
+        if self.manual is not None and self._is_manual(i):
+            return np.array([self.manual.x, self.manual.y])
         ped, trig = self._peds[i], self.ped_trigger_steps[i]
         walked = 0.0 if trig is None else (self.step_count - trig) * self.dt * ped.speed
         walked = min(walked, 2.0 * abs(sc.PED_START_Y))  # stops on the far sidewalk
@@ -100,7 +118,7 @@ class ToySim:
 
     def peds_xy(self) -> np.ndarray:
         """(P, 2) pedestrian centres; a single NaN row when there are none."""
-        if not self._peds:
+        if self.n_peds == 0:
             return np.full((1, 2), np.nan)
         return np.array([self.ped_xy_at(i) for i in range(self.n_peds)])
 
@@ -108,13 +126,17 @@ class ToySim:
         return self.ped_xy_at(0) if self.params.ped_present else None
 
     def ped_walking_at(self, i: int) -> bool:
+        if self.manual is not None and self._is_manual(i):
+            return self.manual.speed > 0.05
         return self.ped_trigger_steps[i] is not None
 
     def ped_walking(self) -> bool:
         return self.params.ped_present and self.ped_walking_at(0)
 
     def ped_moving_at(self, i: int) -> bool:
-        """Triggered and not yet at the far sidewalk."""
+        """Triggered and not yet at the far sidewalk (a driven pedestrian: whether it is walking)."""
+        if self.manual is not None and self._is_manual(i):
+            return self.manual.speed > 0.05
         return self.ped_walking_at(i) and abs(self.ped_xy_at(i)[1] - self._peds[i].y0) < 2.0 * abs(sc.PED_START_Y) - 1e-9
 
     def ped_moving(self) -> bool:
@@ -151,7 +173,7 @@ class ToySim:
 
     def peds_visible(self) -> np.ndarray:
         """(P,) bool; one False when there are no pedestrians."""
-        if not self._peds:
+        if self.n_peds == 0:
             return np.zeros(1, dtype=bool)
         return np.array([self.ped_visible_at(i) for i in range(self.n_peds)], dtype=bool)
 
@@ -171,6 +193,10 @@ class ToySim:
                 vy = -ped.side * ped.speed if self.ped_moving_at(i) else 0.0
                 agents.append(Agent(self.ped_id(i), AgentClass.PEDESTRIAN, xy[0], xy[1], -ped.side * math.pi / 2, 0.0, vy,
                                     2 * sc.PED_RADIUS, 2 * sc.PED_RADIUS, False))
+        if self.manual is not None and self.ped_visible_at(len(self._peds)):
+            m = self.manual
+            agents.append(Agent(MANUAL_PED_ID, AgentClass.PEDESTRIAN, m.x, m.y, m.heading, m.vx, m.vy,
+                                2 * sc.PED_RADIUS, 2 * sc.PED_RADIUS, False))
         for j, mv in enumerate(self._moving):
             vx = self.moving_state[j][1]
             agents.append(Agent(MOVING_BASE + j, AgentClass.VEHICLE, self.moving_pose(j)[0], mv.y, mv.yaw,
@@ -180,8 +206,8 @@ class ToySim:
         occluded = tuple(OccludedRegion(i, sh) for i, sh in shadows if sh is not None)
         return WorldModel(self.time, ego, tuple(agents), occluded, ())
 
-    def step(self, cmd: ControlCommand, max_steer_angle: float) -> None:
-        """Advance one dt under ``cmd`` and update the episode outcome."""
+    def step(self, cmd: ControlCommand, max_steer_angle: float, ped_input: Direction = (0, 0)) -> None:
+        """Advance one dt under ``cmd`` and update the episode outcome. ``ped_input`` drives the manual pedestrian."""
         if self.done:
             raise RuntimeError("episode is over")
         self.state = step(self.state, accel_from_pedals(cmd.throttle, cmd.brake),
@@ -196,6 +222,11 @@ class ToySim:
         for i, ped in enumerate(self._peds):
             if self.ped_trigger_steps[i] is None and ped.x - self.ego_front()[0] <= ped.trigger_distance:
                 self.ped_trigger_steps[i] = self.step_count
+        if self.manual is not None:
+            obstacles = self._parked_rects()
+            if self.state.speed < STOPPED_EGO_SPEED:  # nobody walks into a car that is standing still
+                obstacles.append(self.ego_corners())
+            self.manual.step(ped_input, self.dt, obstacles)
         self.outcome = self._check_end()
 
     def collided(self) -> bool:
@@ -254,43 +285,71 @@ class Episode:
         return self.final_peds[0] if self.params.ped_present else np.full(2, np.nan)
 
 
-def run_episode(params: ScenarioParams, planner: Planner, controller: Controller | None = None,
-                predictor: Predictor | None = None, dt: float = sc.DT) -> Episode:
-    """Run one episode. ``planner.plan(world, route, predictions)``; ``predictor(world)`` is optional."""
-    sim, ctl = ToySim(params, dt), controller or Controller()
-    t: list[float] = []
-    ego: list[list[float]] = []
-    peds: list[np.ndarray] = []
-    vis: list[np.ndarray] = []
-    moving: list[np.ndarray] = []
-    tgt: list[float] = []
-    reason: list[str] = []
-    thr: list[float] = []
-    brk: list[float] = []
-    steer: list[float] = []
-    while not sim.done:
+class EpisodeRunner:
+    """One episode, one step at a time: the loop shared by ``run_episode`` and the live window.
+
+    ``advance`` runs a full cycle (world model, predictions, plan, control, sim step) and logs the row. Because both
+    callers use it, a recorded live session replays to the identical trajectory.
+    """
+
+    def __init__(self, params: ScenarioParams, planner: Planner, controller: Controller | None = None,
+                 predictor: Predictor | None = None, dt: float = sc.DT, manual_ped: ManualPedestrian | None = None):
+        self.params, self.dt = params, dt
+        self.sim, self.ctl = ToySim(params, dt, manual_ped), controller or Controller()
+        self.planner, self.predictor = planner, predictor
+        self.plan = None
+        self.plan_ms = 0.0  # wall time of the last plan() call, for the live window
+        self._rows: dict[str, list] = {k: [] for k in ("t", "ego", "peds", "vis", "moving", "tgt", "reason", "thr", "brk", "steer")}
+
+    @property
+    def done(self) -> bool:
+        return self.sim.done
+
+    def advance(self, ped_input: Direction = (0, 0)) -> None:
+        sim, rows = self.sim, self._rows
         world = sim.world_model()
-        preds: tuple[PredictedTrajectory, ...] = predictor(world) if predictor else ()
-        plan = planner.plan(world, sim.route, preds)
-        cmd = ctl.step(world.stamp, world.ego, sim.route, plan.target_speed, dt)
-        t.append(sim.time)
-        ego.append([sim.state.x, sim.state.y, sim.state.yaw, sim.state.speed])
-        peds.append(sim.peds_xy())
-        vis.append(sim.peds_visible())
-        moving.append(sim.moving_poses())
-        tgt.append(plan.target_speed)
-        reason.append(plan.reason)
-        thr.append(cmd.throttle)
-        brk.append(cmd.brake)
-        steer.append(cmd.steer)
-        sim.step(cmd, ctl.max_steer_angle)
-    assert sim.outcome is not None  # the loop only exits once the episode is done
-    return Episode(
-        params=params, dt=dt, t=np.array(t), ego=np.array(ego), peds=np.array(peds),
-        peds_visible=np.array(vis, dtype=bool), target_speed=np.array(tgt),
-        reason=reason, throttle=np.array(thr), brake=np.array(brk),
-        steer=np.array(steer), outcome=sim.outcome,
-        final_ego=np.array([sim.state.x, sim.state.y, sim.state.yaw, sim.state.speed]),
-        final_peds=sim.peds_xy(), moving=np.array(moving), final_moving=sim.moving_poses(),
-        hit_vehicle=sim.hit_vehicle(),
-    )
+        preds: tuple[PredictedTrajectory, ...] = self.predictor(world) if self.predictor else ()
+        started = time.perf_counter()
+        plan = self.planner.plan(world, sim.route, preds)
+        self.plan_ms = 1000.0 * (time.perf_counter() - started)
+        cmd = self.ctl.step(world.stamp, world.ego, sim.route, plan.target_speed, self.dt)
+        self.plan = plan
+        rows["t"].append(sim.time)
+        rows["ego"].append([sim.state.x, sim.state.y, sim.state.yaw, sim.state.speed])
+        rows["peds"].append(sim.peds_xy())
+        rows["vis"].append(sim.peds_visible())
+        rows["moving"].append(sim.moving_poses())
+        rows["tgt"].append(plan.target_speed)
+        rows["reason"].append(plan.reason)
+        rows["thr"].append(cmd.throttle)
+        rows["brk"].append(cmd.brake)
+        rows["steer"].append(cmd.steer)
+        sim.step(cmd, self.ctl.max_steer_angle, ped_input)
+
+    def episode(self) -> Episode:
+        sim, rows = self.sim, self._rows
+        assert sim.outcome is not None  # only meaningful once the episode is done
+        return Episode(
+            params=self.params, dt=self.dt, t=np.array(rows["t"]), ego=np.array(rows["ego"]), peds=np.array(rows["peds"]),
+            peds_visible=np.array(rows["vis"], dtype=bool), target_speed=np.array(rows["tgt"]),
+            reason=rows["reason"], throttle=np.array(rows["thr"]), brake=np.array(rows["brk"]),
+            steer=np.array(rows["steer"]), outcome=sim.outcome,
+            final_ego=np.array([sim.state.x, sim.state.y, sim.state.yaw, sim.state.speed]),
+            final_peds=sim.peds_xy(), moving=np.array(rows["moving"]), final_moving=sim.moving_poses(),
+            hit_vehicle=sim.hit_vehicle(),
+        )
+
+
+def run_episode(params: ScenarioParams, planner: Planner, controller: Controller | None = None,
+                predictor: Predictor | None = None, dt: float = sc.DT, manual_ped: ManualPedestrian | None = None,
+                ped_inputs: Sequence[Direction] = ()) -> Episode:
+    """Run one episode. ``planner.plan(world, route, predictions)``; ``predictor(world)`` is optional.
+
+    ``manual_ped`` adds a driven pedestrian, fed ``ped_inputs`` one per step (standing still once they run out).
+    """
+    runner = EpisodeRunner(params, planner, controller, predictor, dt, manual_ped)
+    k = 0
+    while not runner.done:
+        runner.advance(ped_inputs[k] if k < len(ped_inputs) else (0, 0))
+        k += 1
+    return runner.episode()

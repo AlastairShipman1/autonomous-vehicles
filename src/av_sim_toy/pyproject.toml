@@ -3,7 +3,7 @@ name = "av-sim-toy"
 version = "0.1.0"
 description = "2D occlusion toy simulator: a pedestrian hidden behind a parked vehicle"
 requires-python = ">=3.12"
-dependencies = ["av-core", "numpy>=1.26", "matplotlib>=3.8"]
+dependencies = ["av-core", "numpy>=1.26", "matplotlib>=3.8", "pygame-ce>=2.5"]
 
 [build-system]
 requires = ["hatchling"]
